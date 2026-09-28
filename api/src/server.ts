@@ -6,7 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import authRouter from "./routes/auth.js";
 import transactionRouter from "./routes/transaction.js";
-import agentRouter from "./routes/agent.js";
+import agentRouter from "./routes/agent/index.js";
 import testRouter from "./routes/test.js";
 import { connectDb } from "./config/db.js";
 import { createSocketServer } from "./socket/index.js";

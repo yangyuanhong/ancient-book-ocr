@@ -6,10 +6,10 @@ import {
 import { getModel } from "./model.js";
 import { getAgent } from "./agent.js";
 import type { BaseMessage } from "@langchain/core/messages";
-import { AgentStreamEvent } from "./types/index.js";
+import { AgentStreamEvent, ReasoningEffort } from "./types/index.js";
 
-export async function invokeAgent(messages: BaseMessage[], userId: string) {
-  const agent = getAgent(userId);
+export async function invokeAgent(messages: BaseMessage[], userId: string, modelName:string) {
+  const agent = getAgent(userId, modelName);
 
   const result = await agent.invoke({
     messages,
@@ -17,8 +17,8 @@ export async function invokeAgent(messages: BaseMessage[], userId: string) {
 
   return result.messages;
 }
-export async function askAgent(userInput: string): Promise<string> {
-  const model = getModel();
+export async function askAgent(userInput: string, modelName: string,): Promise<string> {
+  const model = getModel(modelName);
   const response = await model.invoke([
     new SystemMessage("你是一个友好的中文智能助手，回答要清晰、简洁、准确。"),
     new HumanMessage(userInput),
@@ -47,8 +47,11 @@ export async function askAgent(userInput: string): Promise<string> {
 export async function* streamToolAgent(
   messages: Array<HumanMessage | AIMessage | SystemMessage>,
   userId: string,
+  modelName: string,
+  modelMode?: ReasoningEffort,
+  signal?:AbortSignal
 ): AsyncGenerator<AgentStreamEvent> {
-  const agent = getAgent(userId);
+  const agent = getAgent(userId, modelName, modelMode);
 
   const stream = await agent.stream(
     {
@@ -56,12 +59,16 @@ export async function* streamToolAgent(
     },
     {
       streamMode: "messages",
+      signal,
     },
   );
 
   const startedToolCallIds = new Set<string>();
 
   for await (const item of stream) {
+    if (signal?.aborted) {
+      return;
+    }
     const message = Array.isArray(item) ? item[0] : item;
     const content = message.content;
     // 识别模型发出的Tool调用
@@ -139,8 +146,9 @@ export async function* streamToolAgent(
 // 旧链路：Socket → streamAgent → ChatOpenAI
 export async function* streamAgent(
   messages: Array<HumanMessage | AIMessage | SystemMessage>,
+  modelName:string
 ) {
-  const model = getModel();
+  const model = getModel(modelName);
 
   const stream = await model.stream(messages);
 

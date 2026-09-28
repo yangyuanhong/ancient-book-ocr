@@ -49,9 +49,7 @@ export async function parseDocument(filePath: string):Promise<ParsedDocument> {
 
     switch (code) {
       case "needsOcr":
-        throw new Error(
-          "这是扫描版或图片型 PDF，需要 OCR 才能解析",
-        );
+        throw new DocumentNeedsOcrError();
       case "encrypted":
         throw new Error(
           "文件已加密或受密保护，无法解析",
@@ -75,3 +73,11 @@ export async function parseDocument(filePath: string):Promise<ParsedDocument> {
     }
   }
 }
+
+export class DocumentNeedsOcrError extends Error {
+  constructor() {
+    super("这是扫描版或图片型PDF，需要 OCR 才能解析");
+    this.name = "DocumentNeedsOcrError";
+  }
+}
+

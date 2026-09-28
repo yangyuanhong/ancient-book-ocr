@@ -3,18 +3,25 @@ import { getModel } from "./model.js";
 import { getCurrentTimeTool } from "./tools/get-current-time.js";
 import { calculatorTool } from "./tools/calculator.js";
 import { createGetCurrentUserTool } from "./tools/get-current-user.js";
+import type { ReasoningEffort } from "./types/index.js";
 
 const agentCache = new Map<string, ReturnType<typeof createAgent>>()
 
-export function getAgent(userId:string) {
-  const cachedAgent = agentCache.get(userId) 
+export function getAgent(
+  userId: string,
+  modelName: string,
+  reasoningEffort?: ReasoningEffort,
+) {
+  // 缓存 key 必须包含模型和推理强度，否则切换后仍会复用旧 agent
+  const cacheKey = `${userId}:${modelName}:${reasoningEffort ?? "default"}`
+  const cachedAgent = agentCache.get(cacheKey)
 
   if (cachedAgent) {
     return cachedAgent
   }
 
   const agent = createAgent({
-    model: getModel(),
+    model: getModel(modelName, reasoningEffort),
     tools: [
       getCurrentTimeTool,
       calculatorTool,
@@ -32,7 +39,7 @@ export function getAgent(userId:string) {
     ].join("\n"),
   })
 
-  agentCache.set(userId, agent)
+  agentCache.set(cacheKey, agent)
 
   return agent
 }

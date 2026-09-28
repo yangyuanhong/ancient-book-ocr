@@ -41,20 +41,46 @@ const chatFileSchema = new Schema<ChatFileDocument>(
     },
     status: {
       type: String,
-      enum: [
-        "uploaded",
-        "processing",
-        "ready",
-        "failed",
-      ],
+      enum: ["uploaded", "processing", "ready", "failed"],
       default: "uploaded",
       required: true,
       index: true,
     },
+    ocrRawText: {
+      type: String,
+    },
+    processedText: {
+      type: String,
+    },
+    ocrTaskId: {
+      type: String,
+    },
+    processingStage: {
+      type: String,
+      enum: ["uploaded", "parsing", "ocr", "correction", "completed", "failed"],
+      default: "uploaded",
+      index: true,
+    },
+    processingError: {
+      type: String,
+    },
+    documentType: {
+      type: String,
+      enum: ["ancient_book", "modern_document", "mixed", "unknown"],
+    },
+    classificationConfidence: {
+      type: Number,
+      min: 0,
+      max: 1,
+    },
+    classificationReasons: {
+      type: [String],
+      default: undefined,
+    },
 
     error: {
       type: String,
-    }
+    },
   },
   {
     timestamps: true,
@@ -73,5 +99,5 @@ chatFileSchema.index({
 
 export const ChatFileModel = mongoose.model<ChatFileDocument>(
   "ChatFile",
-  chatFileSchema
+  chatFileSchema,
 );

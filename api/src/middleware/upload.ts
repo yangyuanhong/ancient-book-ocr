@@ -25,8 +25,9 @@ const allowedMimeTypes = new Set([
   // 图片
   "image/jpeg",
   "image/png",
-  "image/gif",
   "image/webp",
+  "image/bmp",
+  "image/tiff",
 
  "text/plain",
   "text/markdown",
@@ -57,8 +58,10 @@ const allowedExtensions = new Set([
   ".jpg",
   ".jpeg",
   ".png",
-  ".gif",
   ".webp",
+  ".bmp",
+  ".tif",
+  ".tiff",
 
   ".doc",
   ".docx",
@@ -146,7 +149,7 @@ export const uploadSingleFile = multer({
 
   limits: {
     // 单个文件最大 10 MB。
-    fileSize: 10 * 1024 * 1024,
+    fileSize: 100 * 1024 * 1024,
     // 一次请求最多接收 1 个文件。
     files: 1,
   },

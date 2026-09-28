@@ -3,6 +3,7 @@ import { Server } from "socket.io";
 import { authenticateSocket } from "./auth.js";
 import { registerSocketHandlers } from "./handlers.js";
 import type { AppSocketServer } from "./types/index.js";
+import { setFileStatusSocket } from "./file-status.js";
 
 export function createSocketServer(httpServer: HttpServer): AppSocketServer {
   const io: AppSocketServer = new Server(httpServer, {
@@ -11,6 +12,7 @@ export function createSocketServer(httpServer: HttpServer): AppSocketServer {
       credentials: true,
     },
   });
+  setFileStatusSocket(io);
 
   // Socket.IO 握手阶段复用 Express 使用的 JWT 密钥校验登录 token
   io.use(authenticateSocket);

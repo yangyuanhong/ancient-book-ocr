@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "chcp 65001 > nul && tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "seed": "tsx src/scripts/seedAdmin.ts"
+    "seed": "chcp 65001 > nul && tsx src/scripts/seedAdmin.ts"
   },
   "dependencies": {
     "@firecrawl/anydoc": "^0.2.4",
