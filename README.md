@@ -12,8 +12,10 @@
 - 分角色权限控制与动态路由
 - 侧边栏 / 顶部导航 / 面包屑 / 标签页布局
 - 仪表盘页面与图表展示
-- 基于 LangChain 的智能体问答与工具调用
-- Socket.IO 流式聊天、会话管理和消息持久化
+- 基于 LangChain 的智能体问答与工具调用，支持前端切换模型和推理强度
+- Socket.IO 流式聊天、会话管理、消息持久化，以及中断生成和断线恢复
+- 基于 Ant Design X Vue 的聊天界面：Markdown 渲染、代码高亮、一键复制
+- 聊天附件上传与解析：PDF / Word / 图片，扫描件和古籍走 OCR 服务
 - 错误页、404/401 页面和全局错误处理
 - SVG 图标、页面标题、复制和全屏交互
 - 多种 Vue 学习示例页面（路由、v-model、图标、心形特效等）
@@ -35,8 +37,10 @@
 - `js-cookie`、`nprogress`、`screenfull`：登录态缓存、顶部进度条和全屏能力
 - `vite-plugin-svg-icons`：SVG 图标管理
 - `normalize.css`：基础样式重置
-- `@advanced-chat/components`：聊天界面组件
+- `ant-design-x-vue`：AI 聊天界面组件（会话列表、消息气泡、输入框、附件）
+- `markdown-it` + `highlight.js`：回复的 Markdown 渲染和代码高亮
 - `socket.io-client`：实时聊天连接
+- `vue-tsc`：`.vue` 文件的类型检查
 
 ### 后端（`api`）
 
@@ -48,8 +52,14 @@
 - dotenv：环境变量管理
 - cors：跨域支持
 - Socket.IO：实时通信
-- LangChain + OpenAI 兼容接口：智能体编排、流式输出和工具调用
+- LangChain + OpenAI 兼容接口：智能体编排、流式输出和工具调用（统一走 Responses API）
+- pino：结构化日志
 - tsx：TypeScript 开发和脚本执行
+
+### OCR 服务（`ocr-service`）
+
+- Python + FastAPI + PaddleOCR：普通图片、古籍竖排图片和可恢复的 PDF 后台 OCR 任务
+- 启动方式和配置见 [ocr-service/README.md](ocr-service/README.md)
 
 ## 项目结构
 
@@ -67,7 +77,8 @@ apps/
 │  │  ├─ stores/                # Pinia 状态（auth / permission / tagsView）
 │  │  ├─ styles/                # 全局样式与 SCSS 变量
 │  │  ├─ utils/                 # Auth、Axios、Socket、校验和标题工具
-│  │  └─ views/                 # 页面视图与学习示例（含智能体聊天）
+│  │  └─ views/                 # 页面视图与学习示例
+│  │     └─ agent/              # 智能体聊天（newIndex.vue 为当前页面，components/ 下为头部、消息区、输入框等）
 │  ├─ index.html
 │  ├─ package.json
 │  ├─ tsconfig.json
@@ -77,15 +88,18 @@ apps/
 │  │  ├─ config/                # 数据库配置
 │  │  ├─ middleware/            # 鉴权中间件
 │  │  ├─ models/                # Mongoose 模型
-│  │  ├─ routes/                # API 路由
-│  │  ├─ agent/                 # LangChain 智能体、模型和工具
+│  │  ├─ routes/                # API 路由（agent/ 下按会话、消息、文件、工具调用拆分）
+│  │  ├─ agent/                 # LangChain 智能体、模型、工具和进行中生成的登记
+│  │  ├─ services/              # 文档解析、OCR / 古籍校对客户端、附件处理流程
 │  │  ├─ socket/                # Socket.IO 鉴权、事件和类型
 │  │  ├─ scripts/               # seed 脚本
 │  │  ├─ types/                 # 类型声明
 │  │  ├─ server.ts
 │  │  └─ ...
+│  ├─ uploads/                  # 聊天附件本地存储
 │  ├─ package.json
 │  └─ tsconfig.json
+├─ ocr-service/                 # FastAPI OCR 服务（Python）
 ├─ README.md
 └─ 面试题.md
 ```
@@ -120,8 +134,17 @@ SEED_ADMIN_USERNAME=admin
 SEED_ADMIN_PASSWORD=admin123
 OPENAI_API_KEY=your-api-key
 OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
-OPENAI_MODEL=gpt-5.6-sol
+
+# 附件 OCR（可选，不上传扫描件/图片可不配）
+OCR_BASE_URL=http://127.0.0.1:8001
+
+# 古籍 OCR 结果校对（可选）
+XUNZI_BASE_URL=http://127.0.0.1:8000/v1
+XUNZI_API_KEY=your-xunzi-api-key
+XUNZI_MODEL=Xunzi-Qwen1.5-7B_chat
 ```
+
+模型和推理强度由前端聊天输入框里的选择器决定，随每条消息发送给后端，后端按白名单校验，不在白名单内的回退到 `gpt-5.6-sol`。新增模型时需要同时修改前端 `ModelSelector.vue` 和后端 `socket/handlers.ts` 里的 `ALLOWED_MODELS`。
 
 `OPENAI_BASE_URL` 需要填写 OpenAI 兼容服务的接口地址，通常以 `/v1` 结尾；如果使用官方 OpenAI 接口，可配置为 `https://api.openai.com/v1`。也可以使用 Windows 用户级或系统级环境变量，但修改后需要重新打开终端或 IDE，确保 Node.js 进程能够读取到新变量。
 
@@ -152,12 +175,15 @@ npm run dev
 - 前端：<http://localhost:5173>
 - 后端：`http://localhost:3000`
 
-登录后可以在前端“智能体”页面创建会话并发送消息。智能体通过 Socket.IO 返回流式文本，并将会话和消息保存到 MongoDB；询问当前日期或时间时，会调用 `get_current_time` 工具获取实时结果。
+登录后可以在前端“智能体”页面创建会话并发送消息。智能体通过 Socket.IO 返回流式文本，并将会话和消息保存到 MongoDB；询问当前日期、时间、数学计算或自己的账号信息时，会分别调用 `get_current_time`、`calculate`、`get_current_user` 工具。
 
-生产构建与预览：
+需要识别扫描版 PDF 或图片附件时，另外启动 `ocr-service`，步骤见 [ocr-service/README.md](ocr-service/README.md)。
+
+类型检查、生产构建与预览：
 
 ```bash
 cd web
+npm run type-check   # vue-tsc 检查 .ts 和 .vue 文件
 npm run build
 npm run preview
 ```
@@ -188,20 +214,41 @@ npm run seed
 POST /auth/login                         登录并获取 Token
 GET  /auth/me                            获取当前用户
 GET  /auth/info                          获取用户信息和角色
-GET  /agent/conversations                查询当前用户的会话
-POST /agent/conversations                创建智能体会话
-GET  /agent/conversations/:id/messages   查询会话历史消息
+GET    /agent/conversations                            查询当前用户的会话（支持 ?keyword= 搜索）
+POST   /agent/conversations                            创建智能体会话
+PATCH  /agent/conversations/:id                        修改会话标题
+DELETE /agent/conversations/:id                        删除会话
+GET    /agent/conversations/:id/messages               查询会话历史消息
+GET    /agent/conversations/:id/tool-calls             查询会话的工具调用记录
+POST   /agent/conversations/:id/files                  上传聊天附件
+GET    /agent/conversations/:id/files/:fileId          查询附件解析状态
+POST   /agent/conversations/:id/files/:fileId/retry    重新解析附件
+POST   /agent/conversations/:id/files/:fileId/cancel   取消附件 OCR 任务
 ```
 
-智能体实时通信使用 Socket.IO，连接地址为 `http://localhost:3000`，握手时通过 `auth.token` 传入登录 Token。主要事件包括：
+智能体实时通信使用 Socket.IO，连接地址为 `http://localhost:3000`，握手时通过 `auth.token` 传入登录 Token。加入房间前服务端会校验会话归属。
+
+客户端发送：
 
 ```text
 chat:join       加入会话房间
 chat:leave      离开会话房间
-chat:send       发送消息
-agent:delta     接收智能体流式文本片段
-agent:error     接收智能体调用错误
+chat:send       发送消息（可带 fileIds、modelName、reasoningEffort）
+chat:cancel     停止当前回复，已生成的部分会保留
+chat:resume     刷新/重连/切回会话后，重新加入房间并获取进行中回复的快照
 ```
+
+服务端推送：
+
+```text
+agent:delta       流式文本片段（带递增 sequence，done 时给出 completed / cancelled）
+agent:tool-start  工具开始执行
+agent:tool-end    工具执行完成
+agent:error       智能体调用错误
+file:status       附件解析进度
+```
+
+中断和恢复依赖进程内存记录进行中的生成，只适用于单实例部署；后端重启时进行中的回复会丢失。
 
 ## 学习内容
 
@@ -217,6 +264,8 @@ agent:error     接收智能体调用错误
 - Express + JWT + MongoDB 的登录接口、鉴权中间件与数据模型
 - LangChain 智能体、OpenAI 兼容模型配置、实时工具调用和流式输出
 - Socket.IO 鉴权、会话房间、消息持久化与前端增量渲染
+- AbortController 中断生成，按序号去重的断线恢复
+- Markdown 安全渲染（禁用原始 HTML 防 XSS）与代码高亮
 - Vue 2 到 Vue 3 的组件、事件和模板语法迁移思路
 - Vite 别名、SVG 图标和 Sass 工程化配置
 
@@ -256,6 +305,8 @@ docs: update local development guide
 - [Pinia](https://pinia.vuejs.org/)
 - [Vue Router](https://router.vuejs.org/)
 - [Ant Design Vue](https://antdv.com/)
+- [Ant Design X Vue](https://github.com/wzc520pyfm/ant-design-x-vue)
+- [LangChain.js](https://js.langchain.com/)
 
 ## 免责声明
 

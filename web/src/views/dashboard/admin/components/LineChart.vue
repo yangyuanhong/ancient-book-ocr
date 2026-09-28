@@ -39,7 +39,8 @@ let options = computed(()=>({
     right: 10,
     bottom: 20,
     top: 30,
-    containLabel: true,
+    outerBoundsMode: "same",
+    outerBoundsContain: "axisLabel",
   },
   tooltip: {
     trigger: "axis",
