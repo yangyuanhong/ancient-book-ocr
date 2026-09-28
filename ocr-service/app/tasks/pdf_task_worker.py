@@ -44,6 +44,8 @@ async def process_one_task(
         repository.initialize_pages(task_id, document.page_count)
 
         while page_record := repository.next_incomplete_page(task_id):
+            if repository.is_task_cancelled(task_id):
+                return
             current_page = page_record.page_number
             last_error: Exception | None = None
             for _attempt in range(ocr_config.page_max_attempts):
@@ -52,6 +54,8 @@ async def process_one_task(
                     result = await recognizer(
                         current_page, str(pdf_path), task.ocr_type
                     )
+                    if repository.is_task_cancelled(task_id):
+                        return
                     repository.complete_page(
                         task_id,
                         current_page,
@@ -64,9 +68,14 @@ async def process_one_task(
                     last_error = error
             if last_error is not None:
                 raise last_error
+        if repository.is_task_cancelled(task_id):
+            return
 
         repository.complete_task(task_id)
     except Exception as error:
+        if repository.is_task_cancelled(task_id):
+            return
+
         message = f"第 {current_page} 页处理失败：{type(error).__name__}: {error}"
         if current_page:
             repository.fail_page_and_task(task_id, current_page, message)

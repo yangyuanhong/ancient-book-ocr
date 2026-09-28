@@ -3,15 +3,6 @@ import json
 import os
 from pathlib import Path
 
-# 限制 Paddle CUDA allocator，避免 OCR 抢占整张显卡导致桌面卡死。
-# 必须在导入 Paddle/PaddleOCR 前设置。
-os.environ.setdefault(
-    "FLAGS_fraction_of_gpu_memory_to_use",
-    os.getenv("OCR_GPU_MEMORY_FRACTION", "0.35"),
-)
-os.environ.setdefault("FLAGS_allocator_strategy", "auto_growth")
-os.environ.setdefault("FLAGS_eager_delete_tensor_gb", "0.5")
-
 import pymupdf
 
 from app.core.config import ocr_config

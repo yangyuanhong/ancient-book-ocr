@@ -36,10 +36,112 @@ class PdfTaskRepository:
         finally:
             connection.close()
 
+    def _migrate_task_status_constraint(
+        self,
+        connection: sqlite3.Connection,
+    ) -> None:
+        row = connection.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'pdf_tasks'
+            """
+        ).fetchone()
+
+        if row is None:
+            return
+
+        create_sql = str(row["sql"] or "")
+
+        if "'cancelled'" in create_sql:
+            return
+
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.executescript(
+                """
+            BEGIN IMMEDIATE;
+            CREATE TABLE pdf_tasks_new (
+                task_id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                ocr_type TEXT NOT NULL CHECK (
+                    ocr_type IN ('normal', 'ancient')
+                ),
+                pdf_path TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'queued',
+                        'processing',
+                        'completed',
+                        'failed',
+                        'cancelled'
+                    )
+                ),
+                page_count INTEGER NOT NULL DEFAULT 0,
+                processed_pages INTEGER NOT NULL DEFAULT 0,
+                progress REAL NOT NULL DEFAULT 0,
+                error TEXT,
+                full_text TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                heartbeat_at TEXT,
+                completed_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0
+            );
+
+            INSERT INTO pdf_tasks_new (
+                task_id,
+                filename,
+                ocr_type,
+                pdf_path,
+                status,
+                page_count,
+                processed_pages,
+                progress,
+                error,
+                full_text,
+                created_at,
+                updated_at,
+                started_at,
+                heartbeat_at,
+                completed_at,
+                attempt_count
+            )
+            SELECT
+                task_id,
+                filename,
+                ocr_type,
+                pdf_path,
+                status,
+                page_count,
+                processed_pages,
+                progress,
+                error,
+                full_text,
+                created_at,
+                updated_at,
+                started_at,
+                heartbeat_at,
+                completed_at,
+                attempt_count
+            FROM pdf_tasks;
+
+            DROP TABLE pdf_tasks;
+            ALTER TABLE pdf_tasks_new RENAME TO pdf_tasks;
+            COMMIT;
+            """
+            )
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise RuntimeError("PDF OCR 数据库迁移后外键校验失败")
+
     def initialize(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
+            self._migrate_task_status_constraint(connection)
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS pdf_tasks (
@@ -48,7 +150,7 @@ class PdfTaskRepository:
                     ocr_type TEXT NOT NULL CHECK (ocr_type IN ('normal', 'ancient')),
                     pdf_path TEXT NOT NULL,
                     status TEXT NOT NULL CHECK (
-                        status IN ('queued', 'processing', 'completed', 'failed')
+                        status IN ('queued', 'processing', 'completed', 'failed', 'cancelled')
                     ),
                     page_count INTEGER NOT NULL DEFAULT 0,
                     processed_pages INTEGER NOT NULL DEFAULT 0,
@@ -116,6 +218,47 @@ class PdfTaskRepository:
         task = self.get_task(task_id)
         assert task is not None
         return task
+    def cancel_task(self, task_id: str) -> PdfTaskRecord:
+        now = self._utc_now()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM pdf_tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            if row["status"] not in {"queued", "processing"}:
+                raise InvalidTaskStateError("只有 queued 或 processing 任务可以取消")
+            connection.execute(
+                """
+                UPDATE pdf_task_pages
+                SET status = 'pending',
+                    error = NULL,
+                    started_at = NULL,
+                    completed_at = NULL
+                WHERE task_id = ?
+                AND status = 'processing'
+                """,
+                (task_id,),
+            )
+
+            connection.execute(
+                """
+                UPDATE pdf_tasks
+                SET status = 'cancelled',
+                    error = NULL,
+                    heartbeat_at = ?,
+                    completed_at = ?,
+                    updated_at = ?
+                WHERE task_id = ?
+                AND status IN ('queued', 'processing')
+                """,
+                (now, now, now, task_id),
+            )
+
+        cancelled = self.get_task(task_id)
+        assert cancelled is not None
+        return cancelled
 
     def get_task(self, task_id: str) -> PdfTaskRecord | None:
         with self._connection() as connection:
@@ -124,6 +267,11 @@ class PdfTaskRepository:
                 (task_id,),
             ).fetchone()
         return self._task_from_row(row)
+
+    def is_task_cancelled(self, task_id: str) -> bool:
+        task = self.get_task(task_id)
+
+        return task is not None and task.status == "cancelled"
 
     def initialize_pages(self, task_id: str, page_count: int) -> None:
         now = self._utc_now()
@@ -189,17 +337,30 @@ class PdfTaskRepository:
             connection.execute(
                 """
                 UPDATE pdf_task_pages
-                SET status = 'processing', error = NULL, started_at = ?,
-                    completed_at = NULL, attempt_count = attempt_count + 1
-                WHERE task_id = ? AND page_number = ?
-                  AND status != 'completed'
+                SET status = 'processing',
+                    error = NULL,
+                    started_at = ?,
+                    completed_at = NULL,
+                    attempt_count = attempt_count + 1
+                WHERE task_id = ?
+                AND page_number = ?
+                AND status != 'completed'
+                AND EXISTS (
+                    SELECT 1
+                    FROM pdf_tasks
+                    WHERE pdf_tasks.task_id = pdf_task_pages.task_id
+                        AND pdf_tasks.status = 'processing'
+                )
                 """,
                 (now, task_id, page_number),
             )
             connection.execute(
                 """
-                UPDATE pdf_tasks SET heartbeat_at = ?, updated_at = ?
+                UPDATE pdf_tasks
+                SET heartbeat_at = ?,
+                    updated_at = ?
                 WHERE task_id = ?
+                AND status = 'processing'
                 """,
                 (now, now, task_id),
             )
@@ -245,11 +406,19 @@ class PdfTaskRepository:
                 UPDATE pdf_task_pages
                 SET status = 'completed', text = ?, items_json = ?, error = NULL,
                     completed_at = ?
-                WHERE task_id = ? AND page_number = ?
+                WHERE task_id = ?
+                    AND page_number = ?
+                    AND EXISTS (
+                        SELECT 1
+                        FROM pdf_tasks
+                        WHERE pdf_tasks.task_id = pdf_task_pages.task_id
+                            AND pdf_tasks.status = 'processing'
+                    )
                 """,
                 (text, json.dumps(items, ensure_ascii=False), now, task_id, page_number),
             )
-            self._update_progress(connection, task_id, now)
+            if connection.execute("SELECT changes()").fetchone()[0]:
+                self._update_progress(connection, task_id, now)
 
     def fail_page_and_task(self, task_id: str, page_number: int, error: str) -> None:
         now = self._utc_now()
@@ -318,7 +487,7 @@ class PdfTaskRepository:
                 SET status = 'completed', progress = 100,
                     processed_pages = page_count, full_text = ?, error = NULL,
                     heartbeat_at = ?, completed_at = ?, updated_at = ?
-                WHERE task_id = ?
+                WHERE task_id = ? AND status = 'processing'
                 """,
                 (full_text, now, now, now, task_id),
             )

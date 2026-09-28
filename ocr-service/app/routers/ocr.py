@@ -256,7 +256,7 @@ async def stream_pdf_task_events(
     async def event_generator():
         snapshot = _task_snapshot(repository, task_id)
         yield format_sse_event("snapshot", snapshot)
-        if snapshot["status"] in {"completed", "failed"}:
+        if snapshot["status"] in {"completed", "failed", "cancelled"}:
             yield format_sse_event(snapshot["status"], snapshot)
             return
 
@@ -275,7 +275,7 @@ async def stream_pdf_task_events(
                 snapshot = task.to_public_dict(repository.list_pages(task_id))
                 last_updated = task.updated_at
                 yield format_sse_event("progress", snapshot)
-                if task.status in {"completed", "failed"}:
+                if task.status in {"completed", "failed", "cancelled"}:
                     yield format_sse_event(task.status, snapshot)
                     return
             if time.monotonic() - last_heartbeat >= 15:
@@ -290,4 +290,36 @@ async def stream_pdf_task_events(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+@router.post("/pdf/tasks/{task_id}/cancel")
+async def cancel_pdf_ocr_task(
+    task_id: str,
+    request: Request,
+) -> JSONResponse:
+    repository: PdfTaskRepository = (
+        request.app.state.pdf_task_repository
+    )
+
+    if repository.get_task(task_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail="PDF OCR 任务不存在",
+        )
+
+    try:
+        task = repository.cancel_task(task_id)
+    except InvalidTaskStateError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
+
+    snapshot = task.to_public_dict(
+        repository.list_pages(task_id)
+    )
+
+    return JSONResponse(
+        status_code=202,
+        content=snapshot,
     )
