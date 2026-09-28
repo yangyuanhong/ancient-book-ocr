@@ -4,7 +4,7 @@ import {
   type AgentDeltaPayload,
   type AgentErrorPayload,
 } from "@/utils/socket";
-import { ChatModel, MessageModel, User } from "@advanced-chat/components";
+import type { ActiveChatLike, MessageModel, User } from "@/views/agent/types";
 import { message } from "ant-design-vue";
 import { type Ref } from "vue";
 
@@ -18,7 +18,7 @@ const toolNameMap: Record<string, string> = {
 export const handleAgentError = (
   payload: AgentErrorPayload,
   messagesText: Ref<MessageModel[]>,
-  activeChat: Ref<ChatModel>,
+  activeChat: Ref<ActiveChatLike>,
 ) => {
   const agentMessage = messagesText.value.find(
     (item) => item.id === payload.messageId,
@@ -33,6 +33,7 @@ export const handleAgentError = (
       sender: {
         id: "assistant",
         name: "小o",
+        key: "assistant",
         status: { state:"online" },
       },
       content: `❌ ${payload.error}`,
@@ -48,13 +49,53 @@ export const handleAgentError = (
 };
 
 const answeringMessageIds = new Set<string>();
+// 每条回复已处理到的 delta 序号
+const lastSequences = new Map<string, number>();
+
+/**
+ * 应用断线恢复快照：用服务端当前完整内容覆盖/创建助手消息，
+ * 并记录快照序号，之后收到的重复 delta 会被 handleAgentDelta 丢弃。
+ */
+export const applyGenerationSnapshot = (
+  snapshot: { messageId: string; content: string; sequence: number },
+  messagesText: Ref<MessageModel[]>,
+  assistantUser: User,
+  activeChat: Ref<ActiveChatLike>,
+) => {
+  lastSequences.set(snapshot.messageId, snapshot.sequence);
+  if (snapshot.content) answeringMessageIds.add(snapshot.messageId);
+
+  const restored: MessageModel = {
+    id: snapshot.messageId,
+    sender: assistantUser,
+    // 还没产生文字（例如在调用工具）时沿用思考中的占位
+    content: snapshot.content || "💭 正在思考…",
+    createdAt: new Date().toISOString(),
+    status: "sending",
+  };
+
+  const index = messagesText.value.findIndex(
+    (item) => item.id === snapshot.messageId,
+  );
+  if (index >= 0) messagesText.value.splice(index, 1, restored);
+  else messagesText.value.push(restored);
+
+  activeChat.value.typingUsers = [{ id: assistantUser.id }];
+};
 
 export const handleAgentDelta = (
   payload: AgentDeltaPayload,
   messagesText: Ref<MessageModel[]>,
   assistantUser: User,
-  activeChat: Ref<ChatModel>,
+  activeChat: Ref<ActiveChatLike>,
 ) => {
+  // 断线恢复时快照已包含这些片段，序号不大于已处理序号的 delta 直接丢弃
+  const lastSequence = lastSequences.get(payload.messageId) ?? 0;
+  if (payload.delta && payload.sequence !== undefined) {
+    if (payload.sequence <= lastSequence) return;
+    lastSequences.set(payload.messageId, payload.sequence);
+  }
+
   let agentMessage = messagesText.value.find(
     (item) => item.id === payload.messageId,
   );
@@ -81,14 +122,52 @@ export const handleAgentDelta = (
       agentMessage.content = "";
     }
 
-    agentMessage.content = `${agentMessage.content ?? ""}${payload.delta}`;
+    const nextContent = `${agentMessage.content ?? ""}${payload.delta}`;
+    const messageIndex = messagesText.value.findIndex(
+      (item) => item.id === payload.messageId,
+    );
+    if (messageIndex >= 0) {
+      messagesText.value.splice(messageIndex, 1, {
+        ...agentMessage,
+        content: nextContent,
+      });
+    } else {
+      agentMessage.content = nextContent;
+    }
   }
 
   if (payload.done) {
-    agentMessage.status = "sent";
+    // 上面的 splice 会换成新对象，agentMessage 已是旧引用，这里必须按 id 重新取当前数组里的项
+    const index = messagesText.value.findIndex(
+      (item) => item.id === payload.messageId,
+    );
+    const current = index >= 0 ? messagesText.value[index] : agentMessage;
+    const hasAnswer = answeringMessageIds.has(payload.messageId);
+    let finished: MessageModel;
+
+    if (payload.status === "cancelled") {
+      // 用户主动停止：保留已生成的部分，和服务端落库的内容保持一致
+      finished = {
+        ...current,
+        content: hasAnswer ? `${current.content ?? ""}\n\n（已停止生成）` : "已停止生成",
+        status: "sent",
+      };
+    } else if (hasAnswer) {
+      finished = { ...current, status: "sent" };
+    } else {
+      // 整轮没有收到任何回答文字：替换掉“正在思考/正在调用工具”的占位文案，避免界面看起来一直卡住
+      finished = {
+        ...current,
+        content: "⚠️ 模型没有返回内容，请重试或切换模型",
+        status: "failed",
+      };
+    }
+
+    if (index >= 0) messagesText.value.splice(index, 1, finished);
     activeChat.value.typingUsers = [];
     toolStatusMessageIds.delete(payload.messageId);
     answeringMessageIds.delete(payload.messageId);
+    lastSequences.delete(payload.messageId);
   }
 };
 
@@ -135,3 +214,4 @@ export const handleAgentToolEnd = (
     agentMessage.content = `✅ ${label}完成，正在整理回答…`;
   }
 };
+

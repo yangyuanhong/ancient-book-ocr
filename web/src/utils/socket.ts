@@ -6,12 +6,36 @@ export interface AgentDeltaPayload {
   messageId: string;
   delta: string;
   done: boolean;
+  /** 递增序号，断线恢复时用来去重 */
+  sequence?: number;
+  /** done 为 true 时的结束原因 */
+  status?: "completed" | "cancelled";
+}
+
+export interface SimpleResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface ResumeGenerationResult extends SimpleResult {
+  /** 进行中回复的快照；没有进行中的回复时为 null */
+  generation?: {
+    messageId: string;
+    content: string;
+    sequence: number;
+  } | null;
 }
 
 export interface AgentErrorPayload {
   conversationId: string
-  messageId: string
+  messageId: string;
   error: string
+}
+
+export interface AgentResumeContentPayload {
+  messageId: string;
+  content: string;
+  status: "running" | "cancelled" | "completed" | "failed";
 }
 
 export interface AgentToolStartPayload {
@@ -25,6 +49,18 @@ export interface AgentToolEndPayload {
   messageId: string
   toolName: string
   result?: string
+}
+
+export interface FileStatusPayload {
+  conversationId: string;
+  fileId: string;
+  name: string;
+  status: "uploaded" | "processing" | "ready" | "failed";
+  processingStage: "uploaded" | "parsing" | "ocr" | "correction" | "completed" | "failed";
+  processingError?: string;
+  documentType?: "ancient_book" | "modern_document" | "mixed" | "unknown";
+  classificationConfidence?: number;
+  classificationReasons?: string[];
 }
 
 export interface ChatMessagePayload {
@@ -54,15 +90,38 @@ interface ServerToClientEvents {
   "chat:message": (message: ChatMessagePayload) => void
   "agent:tool-start": (payload: AgentToolStartPayload) => void
   "agent:tool-end": (payload: AgentToolEndPayload) => void
+  "file:status": (payload: FileStatusPayload) => void
 }
 
 interface ClientToServerEvents {
-  "chat:join": (conversationId: string) => void;
+  "chat:join": (
+    conversationId: string,
+    callback: (result: SimpleResult) => void,
+  ) => void;
   "chat:leave": (conversationId: string) => void;
   "chat:send": (
     payload: SendMessagePayload,
     callback: (result: SendMessageResult) => void,
   ) => void;
+  "chat:cancel": (
+    payload: { conversationId: string; messageId?: string },
+    callback: (result: SimpleResult) => void,
+  ) => void;
+  "chat:resume": (
+    conversationId: string,
+    callback: (result: ResumeGenerationResult) => void,
+  ) => void;
+}
+
+export interface SendMessagePayload {
+  conversationId: string;
+  content: string;
+  clientMessageId: string;
+  fileIds?: string[];
+  /** 模型 value，如 gpt-6-sol */
+  modelName?: string;
+  /** 推理强度，如 low / medium / high */
+  reasoningEffort?: string;
 }
 
 export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -90,7 +149,10 @@ export function disconnectSocket(): void {
 }
 
 export function joinChat(conversationId: string): void {
-  getSocket().emit("chat:join", conversationId);
+  getSocket().emit("chat:join", conversationId, (result) => {
+    // 服务端会校验会话归属，无权访问时不会加入房间
+    if (!result.success) console.warn("加入会话失败：", result.error);
+  });
 }
 
 export function sendChatMessage(
@@ -100,9 +162,33 @@ export function sendChatMessage(
   getSocket().emit("chat:send", payload, callback);
 }
 
-export interface SendMessagePayload {
-  conversationId: string;
-  content: string;
-  clientMessageId: string;
-  fileIds?: string[];
+/** 停止当前回复；messageId 不传时停止该会话里正在进行的回复 */
+export function cancelGeneration(
+  conversationId: string,
+  messageId?: string,
+): Promise<SimpleResult> {
+  return new Promise((resolve) => {
+    getSocket()
+      .timeout(10_000)
+      .emit("chat:cancel", { conversationId, messageId }, (error, result) => {
+        resolve(error ? { success: false, error: "停止请求超时" } : result);
+      });
+  });
 }
+
+/** 重新加入会话房间，并拿到进行中回复的快照（刷新、重连、切回会话时调用） */
+export function resumeGeneration(
+  conversationId: string,
+): Promise<ResumeGenerationResult> {
+  return new Promise((resolve) => {
+    getSocket()
+      .timeout(10_000)
+      .emit("chat:resume", conversationId, (error, result) => {
+        resolve(error ? { success: false, error: "恢复请求超时" } : result);
+      });
+  });
+}
+
+
+
+

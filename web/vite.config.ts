@@ -47,7 +47,14 @@ export default defineConfig({
 
           if (id.includes("echarts")) return "vendor-echarts";
           if (id.includes("zrender")) return "vendor-zrender";
-          if (id.includes("@advanced-chat")) return "vendor-chat";
+          // 聊天页相关：AI 组件、Markdown 渲染和代码高亮
+          if (
+            id.includes("ant-design-x-vue") ||
+            id.includes("markdown-it") ||
+            id.includes("highlight.js")
+          ) {
+            return "vendor-chat";
+          }
           if (
             id.includes("ant-design-vue") ||
             id.includes("@ant-design")
