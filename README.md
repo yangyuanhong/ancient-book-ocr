@@ -1,12 +1,48 @@
-# Vue 3 管理后台学习项目
+# 古籍扫描件智能识别与校对系统
 
-这是一个以学习 Vue 3、Vite、TypeScript 和后台管理系统常见工程能力为目标的前后端分离项目。前端基于 [vue-element-admin](https://github.com/PanJiaChen/vue-element-admin/) 的设计思路进行重构，逐步实现 Vue 3 + Composition API + Pinia 的管理端架构；后端则提供 Express + MongoDB 的登录认证与权限相关接口。
+面向古籍与扫描文档数字化的全栈项目，仓库包含三个服务：`web/`（Vue 3 管理端）、`api/`（Node 智能体服务）、`ocr-service/`（Python OCR 服务）。用户上传图片、扫描版 PDF 或其他文档附件后，系统依次完成 **解析 → OCR → 文种判定 → 大模型校对**，识别结果作为上下文注入智能体对话，实现扫描件直接提问。
 
-> 本项目主要用于个人学习、源码阅读和技术实践，不是 `vue-element-admin` 官方项目的直接分支。
+## 处理流程
+
+```mermaid
+flowchart TD
+    A["web：上传附件<br/>POST /agent/conversations/:id/files"] --> B{"api：按类型分流"}
+
+    B -->|"docx / txt / 版式 PDF"| C["解析正文"]
+    B -->|"图片 / 扫描单页"| D["ocr-service<br/>POST /ocr/ancient-image"]
+    B -->|"扫描版 PDF"| E["ocr-service<br/>POST /ocr/pdf/tasks → 202 + taskId"]
+
+    E --> E1["SQLite 任务 / 页两级状态机"]
+    E1 --> E2["逐页子进程识别<br/>断点续跑 · 取消 · 超时重试"]
+    E2 --> F["OCR 文本"]
+    D --> F
+
+    F --> G["文种判定<br/>文言虚词 · 繁体字 · 版式用语"]
+    G -->|"判为古籍"| H["古籍大模型校对<br/>800 字分块串行 · 失败回退 OCR 原文"]
+    G -->|"现代文档 / 无法判断"| I["附件就绪"]
+    H --> I
+    C --> I
+
+    I --> J["写入 MongoDB<br/>作为上下文注入智能体对话"]
+    J --> K["Socket.IO file:status<br/>实时推送前端步骤链"]
+```
+
+前端把 `processingStage` 还原成步骤链：`上传文件 → OCR 识别 → 文档分类 → 古籍校对`，其中校对节点只在文种判定为古籍时出现，失败时标红但附件仍可继续使用。
+
+## 核心能力：古籍 OCR 链路
+
+- **竖排古籍识别**：整页逆时针旋转 90° 统一为横排 → PaddleOCR 检测与识别 → 检测框坐标反向映射回原图 → 按列坐标从右到左重排，解决通用 OCR 对竖排文本阅读顺序错乱的问题
+- **图像预处理**：基于 RGB 通道比例剔除朱印、纸张底色归一化（保留淡墨正文、不做硬二值化）、过滤装订长边框；自动检测合页扫描图中缝，按「右页在前、左页在后」拆分识别后再合并
+- **长 PDF 后台任务**：FastAPI + SQLite 实现任务/页两级状态机，上传接口立即返回 taskId；每页 OCR 在独立子进程执行以隔离模型崩溃与显存溢出，支持断点续跑、失败页重试、任务取消与 SSE 进度推送
+- **文种判定 + 大模型校对**：基于文言虚词、白话助词、繁体字占比、无标点等特征合成古籍概率，区分古籍 / 现代文档 / 古今混排；仅古籍按 800 字分块串行调用古籍大模型修正错字与断句，模型失败自动降级回 OCR 原文
+- **附件即问**：前端以「解析 → OCR → 文种判定 → 校对 → 完成」分步状态链展示实时进度，支持校对失败单独重试与刷新后的状态快照恢复
+- **智能体对话**：LangChain + Socket.IO 流式回答、多模型与推理强度切换、工具调用、中断生成与断线重连恢复
+
+> 前端管理端基于 [vue-element-admin](https://github.com/PanJiaChen/vue-element-admin/) 的设计思路重构为 Vue 3 + Composition API + Pinia，不是 `vue-element-admin` 官方项目的直接分支。
 
 ## 项目定位
 
-当前项目已经从“单纯的 Vue 学习 demo”升级成了一个更贴近真实管理后台的示例，重点覆盖：
+除古籍 OCR 链路外，管理端本身也覆盖了一个贴近真实后台的完整能力集：
 
 - 登录认证与 Token 管理
 - 分角色权限控制与动态路由
@@ -109,6 +145,7 @@ apps/
 - Node.js 18+
 - npm 9+
 - MongoDB 6+（本地或远程实例）
+- Python 3.11 + GPU 版 PaddlePaddle + PaddleOCR（仅启用 OCR 服务时需要）
 
 ## 安装
 
@@ -121,6 +158,15 @@ npm install
 cd ../api
 npm install
 ```
+
+启用 OCR 服务时还需要安装 Python 依赖（在 `ocr-service` 目录执行，路径换成自己的 Python 解释器）：
+
+```powershell
+cd ../ocr-service
+powershell -ExecutionPolicy Bypass -File scripts/install_gpu.ps1 <你的 python.exe 路径>
+```
+
+> 该脚本安装 GPU 版 PaddlePaddle。若直接 `pip install -r requirements.txt`，会退化成 CPU 版，识别长 PDF 会非常慢。
 
 ## 配置环境变量
 
@@ -142,6 +188,20 @@ OCR_BASE_URL=http://127.0.0.1:8001
 XUNZI_BASE_URL=http://127.0.0.1:8000/v1
 XUNZI_API_KEY=your-xunzi-api-key
 XUNZI_MODEL=Xunzi-Qwen1.5-7B_chat
+```
+
+校对模型只要求 OpenAI 兼容的 `/chat/completions` 接口，不限定具体模型，可以按手头资源替换：
+
+```env
+# 本地 Ollama（模型名换成 ollama list 里已有的）
+XUNZI_BASE_URL=http://127.0.0.1:11434/v1
+XUNZI_API_KEY=ollama
+XUNZI_MODEL=qwen3:8b
+
+# 或云端 API（例如 DeepSeek）
+XUNZI_BASE_URL=https://api.deepseek.com/v1
+XUNZI_API_KEY=sk-你的-key
+XUNZI_MODEL=deepseek-chat
 ```
 
 模型和推理强度由前端聊天输入框里的选择器决定，随每条消息发送给后端，后端按白名单校验，不在白名单内的回退到 `gpt-5.6-sol`。新增模型时需要同时修改前端 `ModelSelector.vue` 和后端 `socket/handlers.ts` 里的 `ALLOWED_MODELS`。
@@ -170,10 +230,21 @@ cd web
 npm run dev
 ```
 
+```bash
+# 终端 4：启动 OCR 服务（可选，上传扫描件 / 图片 / 古籍 PDF 时才需要）
+cd ocr-service
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+> 这里的 `python` 必须是装好 PaddleOCR 的那个解释器：先 `conda activate <环境名>` 再执行，或直接写成该环境 `python.exe` 的绝对路径。默认环境的 python 通常没有 paddle，会报 `ModuleNotFoundError`。
+
+> OCR 服务不要加 `--reload`，也不要开多个 worker：文件变化触发的进程重启会中断正在进行的 Paddle 原生推理，多 worker 则会并发抢显存。
+
 访问地址：
 
 - 前端：<http://localhost:5173>
 - 后端：`http://localhost:3000`
+- OCR 服务：<http://127.0.0.1:8001/docs>
 
 登录后可以在前端“智能体”页面创建会话并发送消息。智能体通过 Socket.IO 返回流式文本，并将会话和消息保存到 MongoDB；询问当前日期、时间、数学计算或自己的账号信息时，会分别调用 `get_current_time`、`calculate`、`get_current_user` 工具。
 
