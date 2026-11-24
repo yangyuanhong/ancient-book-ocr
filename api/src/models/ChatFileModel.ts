@@ -70,7 +70,7 @@ const chatFileSchema = new Schema<ChatFileDocument>(
       type: String,
       enum: ["document", "ocr"],
     },
-    // 荀子校对失败的原因。校对失败不影响附件可用（回退为 OCR 原文），所以单独记录，不写 processingError
+    // 古籍校对失败的原因。校对失败不影响附件可用（回退为 OCR 原文），所以单独记录，不写 processingError
     correctionError: {
       type: String,
     },

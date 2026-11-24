@@ -49,7 +49,7 @@ export interface FileProcessingInfo {
   processingError?: string | null;
   /** 实际走的链路：document = 直接解析文本，ocr = OCR 识别 */
   processingMode?: "document" | "ocr";
-  /** 荀子校对失败原因；此时附件仍可用，内容回退为 OCR 原文 */
+  /** 古籍校对失败原因；此时附件仍可用，内容回退为 OCR 原文 */
   correctionError?: string;
   /** 扫描版 PDF 的逐页识别进度 */
   ocrProgress?: OcrPageProgress;

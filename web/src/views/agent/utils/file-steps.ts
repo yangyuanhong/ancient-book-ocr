@@ -51,7 +51,7 @@ const documentTypeLabels: Record<string, string> = {
 /**
  * 根据附件处理状态推导步骤链：
  *   普通文件：上传 → 解析文档
- *   图片 / 扫描版 PDF：上传 → OCR 识别 → 文档分类 → （古籍才有）荀子大模型校对
+ *   图片 / 扫描版 PDF：上传 → OCR 识别 → 文档分类 → （古籍才有）古籍大模型校对
  * 后端只给出“当前阶段”，这里按链路顺序把之前的步骤补成已完成。
  */
 export function buildFileSteps(info: FileProcessingInfo): FileStep[] {
@@ -114,13 +114,13 @@ export function buildFileSteps(info: FileProcessingInfo): FileStep[] {
     active: !classified && !failed,
   });
 
-  // 只有判定为古籍才会调用荀子大模型
+  // 只有判定为古籍才会调用古籍大模型
   if (info.documentType === "ancient_book") {
     // 校对失败时附件仍然可用（回退为 OCR 原文），这一步标红但整体不算失败
     const correctionFailed = Boolean(info.correctionError) || failed;
     steps.push({
       key: "correction",
-      title: "荀子大模型校对",
+      title: "古籍大模型校对",
       description: info.correctionError
         ? `校对失败，已改用 OCR 原文（${info.correctionError}）`
         : failed

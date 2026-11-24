@@ -130,7 +130,7 @@ async function handleRetryCorrection(fileId: string) {
   try {
     await retryConversationFileCorrection(conversationId, fileId);
   } catch (error: any) {
-    message.error(error?.response?.data?.message || "重试荀子校正失败");
+    message.error(error?.response?.data?.message || "重试古籍校正失败");
     return;
   }
   markCorrectionRetrying(fileId);
@@ -138,7 +138,7 @@ async function handleRetryCorrection(fileId: string) {
   await continueAfterCorrectionRetry(conversationId, fileId, messagesText, activeChat, assistantUser);
 }
 
-/** 不等 socket 推送，先把荀子节点切回“校对中”（去掉 correctionError 即显示加载状态） */
+/** 不等 socket 推送，先把古籍节点切回“校对中”（去掉 correctionError 即显示加载状态） */
 function markCorrectionRetrying(fileId: string) {
   const owner = messagesText.value.find((item) => item.files?.some((file) => file.fileId === fileId));
   const current = owner?.files?.find((file) => file.fileId === fileId);

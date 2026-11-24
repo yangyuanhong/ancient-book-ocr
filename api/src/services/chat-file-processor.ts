@@ -169,7 +169,7 @@ export async function retryAncientCorrection(fileId: string): Promise<void> {
   const file = await ChatFileModel.findById(fileId);
   if (!file) throw new Error("文件不存在");
   const ocrText = file.ocrRawText?.trim();
-  if (!ocrText) throw new Error("没有可供荀子模型处理的 OCR 原文");
+  if (!ocrText) throw new Error("没有可供古籍模型处理的 OCR 原文");
   await correctAndComplete(file, ocrText);
 }
 
@@ -180,7 +180,7 @@ async function correctAndComplete(file: ChatFileDocument, ocrText: string) {
   await file.save();
   emitFileStatus(file);
 
-  // 只有明确判定为古籍时才调用荀子模型；普通 OCR 文档直接保留识别结果。
+  // 只有明确判定为古籍时才调用古籍模型；普通 OCR 文档直接保留识别结果。
   if (file.documentType !== "ancient_book") {
     file.processedText = ocrText;
     file.extractedMarkdown = ocrText;
@@ -191,7 +191,7 @@ async function correctAndComplete(file: ChatFileDocument, ocrText: string) {
     emitFileStatus(file);
     logger.info(
       { originalName: file.originalName, documentType: file.documentType, ocrTextLength: ocrText.length },
-      "非古籍 OCR 文件处理完成，跳过荀子模型",
+      "非古籍 OCR 文件处理完成，跳过古籍模型",
     );
     return;
   }
@@ -201,17 +201,17 @@ async function correctAndComplete(file: ChatFileDocument, ocrText: string) {
   file.processingError = undefined;
   await file.save();
   emitFileStatus(file);
-  // 交给荀子大模型校对古籍文本。校对只是提升质量的附加步骤：
+  // 交给古籍大模型校对古籍文本。校对只是提升质量的附加步骤：
   // 失败时回退为 OCR 原文，附件照样可用，对话不中断；失败原因记在 correctionError 里给前端展示
   let processedText = ocrText;
   file.correctionError = undefined;
   try {
     processedText = await correctAncientText(ocrText);
   } catch (error) {
-    file.correctionError = error instanceof Error ? error.message : "荀子模型调用失败";
+    file.correctionError = error instanceof Error ? error.message : "古籍模型调用失败";
     logger.warn(
       { err: error, fileId: file._id.toString(), originalName: file.originalName },
-      "荀子模型校对失败，回退使用 OCR 原文",
+      "古籍模型校对失败，回退使用 OCR 原文",
     );
   }
 
@@ -227,7 +227,7 @@ async function correctAndComplete(file: ChatFileDocument, ocrText: string) {
 }
 
 function classifyOcrDocument(file: ChatFileDocument, text: string): void {
-  // 判定逻辑见 document-classifier.ts；只有 ancient_book 会调用荀子大模型校对
+  // 判定逻辑见 document-classifier.ts；只有 ancient_book 会调用古籍大模型校对
   const result = classifyDocument(text);
   file.documentType = result.documentType;
   file.classificationConfidence = result.confidence;

@@ -65,7 +65,7 @@ function splitAncientText(
 
 async function correctOneChunk(text: string): Promise<string> {
   const startedAt = Date.now();
-  logger.info({ inputLength: text.length }, "荀子模型调用开始");
+  logger.info({ inputLength: text.length }, "古籍模型调用开始");
   const response = await fetch(
     `${XUNZI_BASE_URL}/chat/completions`,
     {
@@ -105,10 +105,10 @@ async function correctOneChunk(text: string): Promise<string> {
     const detail = await response.text();
     logger.error(
       { status: response.status, inputLength: text.length, elapsedMs: Date.now() - startedAt },
-      "荀子模型调用失败",
+      "古籍模型调用失败",
     );
     throw new Error(
-      `荀子模型调用失败：HTTP ${response.status} ${detail}`,
+      `古籍模型调用失败：HTTP ${response.status} ${detail}`,
     );
   }
 
@@ -133,16 +133,16 @@ async function correctOneChunk(text: string): Promise<string> {
     const finishReason = result.choices?.[0]?.finish_reason;
     logger.error(
       { inputLength: text.length, finishReason, elapsedMs: Date.now() - startedAt },
-      "荀子模型返回空结果",
+      "古籍模型返回空结果",
     );
     throw new Error(
-      `荀子模型没有返回处理结果${finishReason ? `（finish_reason: ${finishReason}）` : ""}`,
+      `古籍模型没有返回处理结果${finishReason ? `（finish_reason: ${finishReason}）` : ""}`,
     );
   }
 
   logger.info(
     { inputLength: text.length, outputLength: content.length, elapsedMs: Date.now() - startedAt },
-    "荀子模型调用完成",
+    "古籍模型调用完成",
   );
   return content;
 }
@@ -153,20 +153,20 @@ export async function correctAncientText(
   const chunks = splitAncientText(text);
 
   if (chunks.length === 0) {
-    throw new Error("没有可供荀子模型处理的文字");
+    throw new Error("没有可供古籍模型处理的文字");
   }
 
   const results: string[] = [];
   logger.info(
     { inputLength: text.length, chunkCount: chunks.length },
-    "荀子文本校正开始",
+    "古籍文本校正开始",
   );
 
   // 串行处理，防止同时请求占用过多显存。
   for (let index = 0; index < chunks.length; index+=1) {
     logger.info(
       { chunk: index + 1, totalChunks: chunks.length, inputLength: chunks[index].length },
-      "荀子文本分块处理中",
+      "古籍文本分块处理中",
     );
     const result = await correctOneChunk(chunks[index]);
     results.push(result);
@@ -175,7 +175,7 @@ export async function correctAncientText(
   const output = results.join("\n\n");
   logger.info(
     { inputLength: text.length, outputLength: output.length, chunkCount: chunks.length },
-    "荀子文本校正完成",
+    "古籍文本校正完成",
   );
   return output;
 }

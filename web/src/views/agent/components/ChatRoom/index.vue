@@ -125,7 +125,7 @@ function renderUserFiles(files: MessageFileModel[]) {
 }
 
 /**
- * 助手气泡上方：展示 agent 处理附件的步骤（解析 / OCR → 分类 → 荀子校对）。
+ * 助手气泡上方：展示 agent 处理附件的步骤（解析 / OCR → 分类 → 古籍校对）。
  * 附件挂在用户消息上，这里取紧挨着的上一条用户消息里、已上传成功的附件。
  */
 function renderAgentSteps(files: MessageFileModel[]) {

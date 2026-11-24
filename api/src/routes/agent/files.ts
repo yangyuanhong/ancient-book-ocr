@@ -316,13 +316,13 @@ router.post("/conversations/:conversationId/files/:fileId/retry-correction",
       file.correctionError = undefined;
       file.error = undefined;
       await file.save();
-      // 立即推送“校对中”，前端荀子节点据此回到加载状态
+      // 立即推送“校对中”，前端古籍节点据此回到加载状态
       emitFileStatus(file);
 
       void retryAncientCorrection(file._id.toString()).catch(async (error) => {
-        logger.error({ err: error, fileId }, "重试荀子校正失败");
+        logger.error({ err: error, fileId }, "重试古籍校正失败");
         // 兜底：意外异常也要把节点打回失败，不能一直转圈
-        const message = error instanceof Error ? error.message : "荀子模型调用失败";
+        const message = error instanceof Error ? error.message : "古籍模型调用失败";
         const failed = await ChatFileModel.findByIdAndUpdate(
           fileId,
           { $set: { status: "ready", processingStage: "completed", correctionError: message } },
@@ -333,12 +333,12 @@ router.post("/conversations/:conversationId/files/:fileId/retry-correction",
 
       return res.status(202).json({
         code: 20000,
-        message: "已重新提交荀子校正",
+        message: "已重新提交古籍校正",
         data: { fileId: file._id.toString(), processingStage: file.processingStage },
       });
     } catch (error) {
-      logger.error({ err: error, userId, conversationId, fileId }, "重试荀子校正失败");
-      return res.status(500).json({ code: 50000, message: "重试荀子校正失败", data: null });
+      logger.error({ err: error, userId, conversationId, fileId }, "重试古籍校正失败");
+      return res.status(500).json({ code: 50000, message: "重试古籍校正失败", data: null });
     }
   });
 

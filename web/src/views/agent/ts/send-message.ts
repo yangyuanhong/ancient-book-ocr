@@ -87,7 +87,7 @@ export async function sendMessage(
     // 上传成功，用户这条消息就算发出去了；后面的解析 / OCR 是 agent 的工作
     patchMessage(messagesText, clientMessageId, { status: "sent" });
 
-    // 3. 助手气泡出现，上方展示处理附件的步骤（解析 / OCR / 荀子校对）；
+    // 3. 助手气泡出现，上方展示处理附件的步骤（解析 / OCR / 古籍校对）；
     //    步骤数据取自上一条用户消息的附件，见 ChatRoom
     messagesText.value.push({
       id: pendingAgentMessageId,
@@ -114,7 +114,7 @@ export async function sendMessage(
       return;
     }
 
-    // 荀子校对失败：先不调用主模型，等用户点重试，成功后由 continueAfterCorrectionRetry 继续
+    // 古籍校对失败：先不调用主模型，等用户点重试，成功后由 continueAfterCorrectionRetry 继续
     if (correctionFailed) {
       waitForCorrectionRetry(ctx, messagesText, activeChat);
       return;
@@ -124,7 +124,7 @@ export async function sendMessage(
   dispatchAgentMessage(ctx, messagesText, activeChat, assistantUser);
 }
 
-/** 一条待调用主模型的消息；荀子校对失败时暂存，重试成功后继续发送 */
+/** 一条待调用主模型的消息；古籍校对失败时暂存，重试成功后继续发送 */
 interface PendingSend {
   conversationId: string;
   clientMessageId: string;
@@ -135,14 +135,14 @@ interface PendingSend {
   reasoningEffort?: string;
 }
 
-/** fileId → 等待荀子重试的消息。只存在内存里，刷新页面后丢失 */
+/** fileId → 等待古籍重试的消息。只存在内存里，刷新页面后丢失 */
 const pendingSends = new Map<string, PendingSend>();
 
 const correctionFailedText =
-  "荀子大模型校对失败，点击上方「重试荀子校正」，成功后会自动继续分析。";
+  "古籍大模型校对失败，点击上方「重试古籍校正」，成功后会自动继续分析。";
 
 /**
- * 等所有附件处理结束，返回是否有古籍的荀子校对失败。
+ * 等所有附件处理结束，返回是否有古籍的古籍校对失败。
  * 处理本身失败（OCR 出错等）时抛错。
  */
 async function waitForAllFilesReady(
@@ -174,7 +174,7 @@ function waitForCorrectionRetry(
 }
 
 /**
- * 点击“重试荀子校正”并且接口已受理后调用：
+ * 点击“重试古籍校正”并且接口已受理后调用：
  * 等这条消息的附件重新处理完，校对成功就接着调用主模型，仍失败就继续等下一次重试。
  */
 export async function continueAfterCorrectionRetry(
@@ -347,7 +347,7 @@ async function waitForUploadedFileReady(
   const deadline = Date.now() + 30 * 60 * 1000;
   let timer: number | undefined;
 
-  // 返回最终处理状态，调用方据此判断荀子校对是否失败
+  // 返回最终处理状态，调用方据此判断古籍校对是否失败
   return new Promise<FileProcessingInfo>((resolve, reject) => {
     let settled = false;
     const cleanup = () => {

@@ -67,7 +67,7 @@ const items = computed<ThoughtChainItem[]>(() =>
       ? renderPageBar(step.pages)
       : step.key === "correction" && step.status === "error"
         ? h("button", { class: "file-steps__retry", type: "button", onClick: () => emit("retry") }, [
-            h(ReloadOutlined), " 重试荀子校正",
+            h(ReloadOutlined), " 重试古籍校正",
           ])
         : undefined,
   })),

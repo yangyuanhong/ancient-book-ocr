@@ -3,7 +3,7 @@
  *
  * 思路：提取若干可解释的特征，用 logistic 函数合成“是古籍”的概率，
  * 再按有效字数收缩置信度（字越少证据越弱）。古今混排单独按段落判断，
- * 典型场景是“原文 + 白话译文”。只有 ancient_book 会触发荀子大模型校对。
+ * 典型场景是“原文 + 白话译文”。只有 ancient_book 会触发古籍大模型校对。
  */
 
 export type DocumentType = "ancient_book" | "modern_document" | "mixed" | "unknown";
