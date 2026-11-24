@@ -5,7 +5,7 @@
     </div>
     <div style="position:relative;">
       <pan-thumb :image="avatar" class="panThumb" />
-      <mallki class-name="mallki-text" text="vue-ant-admin" />
+      <mallki class-name="mallki-text" text="ancient-book-ocr" />
       <div style="padding-top:35px;" class="progress-item">
         <span>Vue</span>
         <a-progress :percent="70" />

@@ -13,7 +13,7 @@ const props = withDefaults(
   }>(),
   {
     className: "",
-    text: "vue-ant-admin",
+    text: "ancient-book-ocr",
   },
 );
 </script>
