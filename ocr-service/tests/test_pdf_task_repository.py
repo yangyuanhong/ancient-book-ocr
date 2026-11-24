@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.pdf_task_repository import InvalidTaskStateError, PdfTaskRepository
+from app.tasks.pdf_task_repository import InvalidTaskStateError, PdfTaskRepository
 
 
 class PdfTaskRepositoryTests(unittest.TestCase):

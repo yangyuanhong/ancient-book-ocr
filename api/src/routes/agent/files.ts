@@ -8,7 +8,12 @@ import { uploadDirectory, uploadSingleFile } from "../../middleware/upload.js";
 import { logger } from "../../utils/logger.js";
 import { authRequired } from "../../middleware/auth.js";
 import { ConversationModel } from "../../models/ConversationModel.js";
-import { startChatFileProcessing } from "../../services/chat-file-processor.js";
+import {
+  startChatFileProcessing,
+  toFileProcessingInfo,
+  retryAncientCorrection,
+  emitFileStatus,
+} from "../../services/chat-file-processor.js";
 import { cancelPdfOcrTask } from "../../services/ocr-client.js";
 
 const router = Router();
@@ -206,8 +211,7 @@ router.get("/conversations/:conversationId/files/:fileId", authRequired, async (
       data: {
         fileId: file._id.toString(),
         name: file.originalName,
-        status: file.status,
-        processingStage: file.processingStage,
+        ...toFileProcessingInfo(file),
         processingError: file.processingError || file.error,
         hasOcrText: Boolean(file.ocrRawText),
         hasProcessedText: Boolean(file.processedText),
@@ -292,6 +296,51 @@ router.post("/conversations/:conversationId/files/:fileId/retry",
       }
     })
 })
+
+router.post("/conversations/:conversationId/files/:fileId/retry-correction",
+  authRequired, async (req, res) => {
+    const userId = req.user!.sub;
+    const { conversationId, fileId } = req.params;
+    try {
+      const file = await ChatFileModel.findOne({ _id: fileId, conversationId, ownerId: userId });
+      if (!file) return res.status(404).json({ code: 40400, message: "文件不存在或无权访问", data: null });
+      if (file.documentType !== "ancient_book" || !file.ocrRawText?.trim()) {
+        return res.status(409).json({ code: 40900, message: "当前文件没有可重试的古籍 OCR 校正", data: null });
+      }
+      if (file.status === "processing") {
+        return res.status(409).json({ code: 40900, message: "文件正在处理中", data: null });
+      }
+      file.status = "processing";
+      file.processingStage = "correction";
+      file.processingError = undefined;
+      file.correctionError = undefined;
+      file.error = undefined;
+      await file.save();
+      // 立即推送“校对中”，前端荀子节点据此回到加载状态
+      emitFileStatus(file);
+
+      void retryAncientCorrection(file._id.toString()).catch(async (error) => {
+        logger.error({ err: error, fileId }, "重试荀子校正失败");
+        // 兜底：意外异常也要把节点打回失败，不能一直转圈
+        const message = error instanceof Error ? error.message : "荀子模型调用失败";
+        const failed = await ChatFileModel.findByIdAndUpdate(
+          fileId,
+          { $set: { status: "ready", processingStage: "completed", correctionError: message } },
+          { new: true },
+        ).catch(() => null);
+        if (failed) emitFileStatus(failed);
+      });
+
+      return res.status(202).json({
+        code: 20000,
+        message: "已重新提交荀子校正",
+        data: { fileId: file._id.toString(), processingStage: file.processingStage },
+      });
+    } catch (error) {
+      logger.error({ err: error, userId, conversationId, fileId }, "重试荀子校正失败");
+      return res.status(500).json({ code: 50000, message: "重试荀子校正失败", data: null });
+    }
+  });
 
 /**
  * PDF 已经创建 OCR 任务：调用 OCR 服务取消；

@@ -58,6 +58,14 @@ export interface FileStatusPayload {
   status: "uploaded" | "processing" | "ready" | "failed";
   processingStage: "uploaded" | "parsing" | "ocr" | "correction" | "completed" | "failed";
   processingError?: string;
+  processingMode?: "document" | "ocr";
+  correctionError?: string;
+  ocrProgress?: {
+    pageCount: number;
+    succeededPages: number;
+    failedPages: number;
+    currentPage?: number;
+  };
   documentType?: "ancient_book" | "modern_document" | "mixed" | "unknown";
   classificationConfidence?: number;
   classificationReasons?: string[];

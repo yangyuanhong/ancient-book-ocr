@@ -4,6 +4,7 @@ import { ConversationModel } from "../../models/ConversationModel.js";
 import { ChatMessageModel } from "../../models/ChatMessageModel.js";
 import { ChatFileModel } from "../../models/ChatFileModel.js";
 import { logger } from "../../utils/logger.js";
+import { toFileProcessingInfo } from "../../services/chat-file-processor.js";
 
 const router = Router();
 
@@ -65,8 +66,8 @@ router.get(
               name: file!.originalName,
               mimeType: file!.mimeType,
               size: file!.size,
-              status: file!.status,
-              processingStage: file!.processingStage,
+              // 带上处理链路和分类结果，刷新后前端能还原附件的处理步骤
+              ...toFileProcessingInfo(file!),
               processingError: file!.processingError??null,
             }
           ))

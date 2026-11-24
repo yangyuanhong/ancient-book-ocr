@@ -36,6 +36,7 @@ import { computed, h, nextTick, ref, watch } from "vue";
 import type { MessageFileModel, MessageModel } from "@/views/agent/types";
 import { renderMarkdown } from "@/views/agent/utils/markdown";
 import { copyText } from "@/views/agent/utils/copy";
+import FileSteps from "@/views/agent/components/FileSteps/index.vue";
 
 const props = defineProps<{
   messages: MessageModel[];
@@ -43,6 +44,7 @@ const props = defineProps<{
   currentUserId: string;
   currentUserAvatar?: string;
   assistantName: string;
+  onRetryCorrection?: (fileId: string) => void;
 }>();
 
 const listRef = ref<InstanceType<typeof Bubble.List> | null>(null);
@@ -81,23 +83,72 @@ const welcomeIcon = () =>
     icon: h(RobotOutlined),
   });
 
-function renderFiles(files: MessageFileModel[]) {
+/**
+ * 用户气泡上方：文件卡片。上传中卡片底色从左往右按进度填充，
+ * 描述显示百分比；上传失败卡片变红。
+ */
+function renderUserFiles(files: MessageFileModel[]) {
   return h(
     Flex,
-    { wrap: "wrap", gap: 8, class: "chat-room__files" },
+    { wrap: "wrap", gap: 8, justify: "flex-end", class: "chat-room__files" },
     () =>
-      files.map((file, index) =>
-        h(Attachments.FileCard, {
-          key: `${file.name}-${index}`,
+      files.map((file, index) => {
+        const uploading = file.uploadStatus === "uploading";
+        const failed = file.uploadStatus === "error";
+        const progress = uploading ? (file.progress ?? 0) : 100;
+
+        return h(Attachments.FileCard, {
+          key: file.fileId ?? `${file.name}-${index}`,
+          className: [
+            "chat-room__file-card",
+            uploading && "is-uploading",
+            failed && "is-failed",
+          ]
+            .filter(Boolean)
+            .join(" "),
+          // 进度通过 CSS 变量传给背景渐变，宽度变化带过渡动画
+          style: { "--upload-progress": `${progress}%` },
           item: {
-            uid: `${file.name}-${index}`,
+            uid: file.fileId ?? `${file.name}-${index}`,
             name: file.name,
             size: file.size,
             status: "done",
+            description: uploading
+              ? `上传中 ${progress}%`
+              : failed
+                ? "上传失败"
+                : undefined,
           },
+        });
+      }),
+  );
+}
+
+/**
+ * 助手气泡上方：展示 agent 处理附件的步骤（解析 / OCR → 分类 → 荀子校对）。
+ * 附件挂在用户消息上，这里取紧挨着的上一条用户消息里、已上传成功的附件。
+ */
+function renderAgentSteps(files: MessageFileModel[]) {
+  return h(
+    Flex,
+    { vertical: true, gap: 8, class: "chat-room__steps" },
+    () =>
+      files.map((file, index) =>
+        h(FileSteps, {
+          key: file.fileId ?? `${file.name}-${index}`,
+          name: file.name,
+          info: file.processing!,
+          onRetry: () => file.fileId && props.onRetryCorrection?.(file.fileId),
         }),
       ),
   );
+}
+
+/** 找到助手消息对应的附件：必须是紧挨着的上一条用户消息 */
+function stepFilesFor(index: number): MessageFileModel[] {
+  const previous = props.messages[index - 1];
+  if (!previous || previous.sender.id !== props.currentUserId) return [];
+  return (previous.files ?? []).filter((file) => file.processing);
 }
 
 const roles: BubbleListProps["roles"] = {
@@ -123,10 +174,11 @@ const roles: BubbleListProps["roles"] = {
 };
 
 const bubbleItems = computed<BubbleListProps["items"]>(() =>
-  props.messages.map((item) => {
+  props.messages.map((item, messageIndex) => {
     const isUser = item.sender.id === props.currentUserId;
     const failed = item.status === "failed";
     const pending = !isUser && item.status === "sending";
+    const stepFiles = isUser ? [] : stepFilesFor(messageIndex);
 
     return {
       key: item.id,
@@ -134,8 +186,14 @@ const bubbleItems = computed<BubbleListProps["items"]>(() =>
       content: item.content ?? "",
       // 还没有任何文字时显示加载动画；“正在思考/调用工具”等状态文案照常展示
       loading: pending && !item.content,
-      // 附件卡片放在气泡上方
-      header: item.files?.length ? renderFiles(item.files) : undefined,
+      // 用户气泡上方是文件卡片，助手气泡上方是处理附件的步骤链
+      header: isUser
+        ? item.files?.length
+          ? renderUserFiles(item.files)
+          : undefined
+        : stepFiles.length
+          ? renderAgentSteps(stepFiles)
+          : undefined,
       footer: failed
         ? h("span", { class: "chat-room__failed" }, "发送失败")
         : !isUser && !pending && item.content
@@ -261,6 +319,52 @@ $avatar-gutter: 44px;
 :deep(.chat-room__text) {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/*
+ * 上传进度：卡片底下铺一层主色浅底，宽度 = 进度，从左往右慢慢填满。
+ * 用伪元素而不是背景渐变，因为 width 可以做过渡动画，渐变的色标不行。
+ */
+:deep(.chat-room__file-card) {
+  overflow: hidden;
+  isolation: isolate;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    width: 0;
+    background: #d6e4ff;
+    transition: width 0.3s ease, opacity 0.4s ease;
+  }
+
+  &.is-uploading::before {
+    width: var(--upload-progress, 0%);
+  }
+
+  // 完成后填满再淡出，回到普通卡片的底色
+  &:not(.is-uploading):not(.is-failed)::before {
+    width: 100%;
+    opacity: 0;
+  }
+
+  &.is-failed {
+    border-color: #ffccc7;
+
+    &::before {
+      width: 100%;
+      background: #fff1f0;
+    }
+
+    .ant-attachment-list-card-desc {
+      color: #ff4d4f;
+    }
+  }
+}
+
+:deep(.chat-room__steps) {
+  margin-bottom: 4px;
 }
 
 :deep(.chat-room__files) {

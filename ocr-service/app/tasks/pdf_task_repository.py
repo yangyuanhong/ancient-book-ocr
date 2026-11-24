@@ -366,11 +366,12 @@ class PdfTaskRepository:
             )
 
     def _update_progress(self, connection: sqlite3.Connection, task_id: str, now: str) -> None:
+        # 失败的页也算“已处理”，否则有页失败时进度永远到不了 100%
         completed = int(
             connection.execute(
                 """
                 SELECT COUNT(*) FROM pdf_task_pages
-                WHERE task_id = ? AND status = 'completed'
+                WHERE task_id = ? AND status IN ('completed', 'failed')
                 """,
                 (task_id,),
             ).fetchone()[0]
@@ -441,6 +442,21 @@ class PdfTaskRepository:
                 (error, now, now, task_id),
             )
 
+    def fail_page(self, task_id: str, page_number: int, error: str) -> None:
+        """标记单页失败并继续后面的页；整本书是否失败由 worker 在最后判断。"""
+        now = self._utc_now()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE pdf_task_pages
+                SET status = 'failed', error = ?, completed_at = ?
+                WHERE task_id = ? AND page_number = ?
+                  AND status != 'completed'
+                """,
+                (error, now, task_id, page_number),
+            )
+            self._update_progress(connection, task_id, now)
+
     def fail_task(self, task_id: str, error: str) -> None:
         now = self._utc_now()
         with self._connection() as connection:
@@ -458,7 +474,7 @@ class PdfTaskRepository:
             row = connection.execute(
                 """
                 SELECT * FROM pdf_task_pages
-                WHERE task_id = ? AND status != 'completed'
+                WHERE task_id = ? AND status IN ('pending', 'processing')
                 ORDER BY page_number LIMIT 1
                 """,
                 (task_id,),

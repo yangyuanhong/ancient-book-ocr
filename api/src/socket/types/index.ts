@@ -1,4 +1,5 @@
 import type { Server, Socket } from "socket.io";
+import type { ChatFileStatusPayload } from "../file-status.js";
 
 export interface SocketUser {
   sub: string;
@@ -83,14 +84,7 @@ export interface ServerToClientEvents {
   "agent:error": (payload: AgentErrorPayload) => void;
   "agent:tool-start": (payload: AgentToolStartPayload) => void;
   "agent:tool-end": (payload: AgentToolEndPayload) => void;
-  "file:status": (payload: {
-    conversationId: string;
-    fileId: string;
-    name: string;
-    status: "uploaded" | "processing" | "ready" | "failed";
-    processingStage: "uploaded" | "parsing" | "ocr" | "correction" | "completed" | "failed";
-    processingError?: string;
-  }) => void;
+  "file:status": (payload: ChatFileStatusPayload) => void;
 }
 
 export interface ClientToServerEvents {

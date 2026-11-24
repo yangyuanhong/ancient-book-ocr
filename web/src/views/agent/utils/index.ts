@@ -1,6 +1,7 @@
 import type {
+  FileProcessingInfo,
   MessageModel,
-  MessageFileModel, 
+  MessageFileModel,
   User,
 } from "@/views/agent/types";
 import type { ChatMessageDto } from "../types";
@@ -14,6 +15,8 @@ export function toMessageModel(
   const sender = item.role === "assistant" ? assistantUser : currentUser.value;
 
   const files: MessageFileModel[] = (item.attachments ?? []).map((attachment) => ({
+    fileId: attachment.fileId,
+    processing: toFileProcessing(attachment),
     name: getDisplayName(attachment.name),
     type: attachment.mimeType ?? "application/octet-stream",
     extension: getExtension(attachment.name),
@@ -29,6 +32,21 @@ export function toMessageModel(
     content:item.content,
     createdAt: item.createdAt,
     status: item.status,
+  };
+}
+
+/** 从接口 / Socket 数据里取出附件处理状态字段，丢掉文件名等无关字段 */
+export function toFileProcessing(source: FileProcessingInfo): FileProcessingInfo {
+  return {
+    status: source.status,
+    processingStage: source.processingStage,
+    processingError: source.processingError,
+    processingMode: source.processingMode,
+    correctionError: source.correctionError,
+    ocrProgress: source.ocrProgress,
+    documentType: source.documentType,
+    classificationConfidence: source.classificationConfidence,
+    classificationReasons: source.classificationReasons,
   };
 }
 

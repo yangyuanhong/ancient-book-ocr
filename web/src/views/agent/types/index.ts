@@ -23,58 +23,63 @@ export interface ChatMessageDto {
   attachments?: MessageAttachment[];
 }
 
-export interface UploadedChatFileDto {
-  fileId: string;
-  name: string;
-  mimeType: string;
-  size: number;
-  status: "uploaded" | "processing" | "ready" | "failed";
-  createdAt: string;
-  processingStage?:
-    | "uploaded"
-    | "parsing"
-    | "ocr"
-    | "correction"
-    | "completed"
-    | "failed";
-  processingError?: string;
+export type FileProcessingStage =
+  | "uploaded"
+  | "parsing"
+  | "ocr"
+  | "correction"
+  | "completed"
+  | "failed";
+
+export interface OcrPageProgress {
+  pageCount: number;
+  succeededPages: number;
+  failedPages: number;
+  /** 正在识别的页码，识别结束后不再返回 */
+  currentPage?: number;
+}
+
+/**
+ * 附件处理状态。与后端 toFileProcessingInfo 对应，
+ * Socket 推送、状态查询接口、历史消息附件都返回这组字段。
+ */
+export interface FileProcessingInfo {
+  status: Status;
+  processingStage?: FileProcessingStage;
+  processingError?: string | null;
+  /** 实际走的链路：document = 直接解析文本，ocr = OCR 识别 */
+  processingMode?: "document" | "ocr";
+  /** 荀子校对失败原因；此时附件仍可用，内容回退为 OCR 原文 */
+  correctionError?: string;
+  /** 扫描版 PDF 的逐页识别进度 */
+  ocrProgress?: OcrPageProgress;
   documentType?: "ancient_book" | "modern_document" | "mixed" | "unknown";
   classificationConfidence?: number;
   classificationReasons?: string[];
 }
 
-export interface ConversationFileStatus {
+export interface UploadedChatFileDto extends FileProcessingInfo {
   fileId: string;
   name: string;
-  status: "uploaded" | "processing" | "ready" | "failed";
-  processingStage?:
-    | "uploaded"
-    | "parsing"
-    | "ocr"
-    | "correction"
-    | "completed"
-    | "failed";
-  processingError?: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
+export interface ConversationFileStatus extends FileProcessingInfo {
+  fileId: string;
+  name: string;
   hasOcrText: boolean;
   hasProcessedText: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface MessageAttachment {
+export interface MessageAttachment extends FileProcessingInfo {
   fileId: string;
   name: string;
   mimeType?: string;
   size?: number;
-  status: "uploaded" | "processing" | "ready" | "failed";
-  processingStage?:
-    | "uploaded"
-    | "parsing"
-    | "ocr"
-    | "correction"
-    | "completed"
-    | "failed";
-  processingError?: string | null;
 }
 
 export type Status = "uploaded" | "processing" | "ready" | "failed";
@@ -102,6 +107,12 @@ export interface User {
 }
 
 export interface MessageFileModel {
+  /** 服务端附件 id，收到 file:status 时据此更新处理步骤 */
+  fileId?: string;
+  /** 附件处理状态，助手气泡里据此渲染“解析 / OCR → 校对”的步骤链 */
+  processing?: FileProcessingInfo;
+  /** 上传状态，用户气泡里的文件卡片据此显示进度底色 */
+  uploadStatus?: "uploading" | "done" | "error";
   name: string;
   type: string;
   extension: string;

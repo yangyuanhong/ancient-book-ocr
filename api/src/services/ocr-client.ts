@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { PdfOcrTask } from "./types/index.js";
+import type { OcrPageProgress, PdfOcrTask } from "./types/index.js";
 
 const OCR_BASE_URL = process.env.OCR_BASE_URL || "http://127.0.0.1:8001";
 
@@ -139,14 +139,28 @@ export async function cancelPdfOcrTask(
   return (await response.json())
 }
 
+/** 从任务快照里取出逐页进度；OCR 服务是旧版本、没有这些字段时返回 undefined */
+export function toOcrPageProgress(task: PdfOcrTask): OcrPageProgress | undefined {
+  if (!task.pageCount) return undefined;
+  return {
+    pageCount: task.pageCount,
+    succeededPages: task.succeededPages ?? 0,
+    failedPages: task.failedPages ?? 0,
+    ...(task.currentPage ? { currentPage: task.currentPage } : {}),
+  };
+}
+
 export async function waitForPdfOcrTask(
   taskId: string,
+  /** 每次轮询拿到新快照时回调，用于把逐页进度推给前端 */
+  onProgress?: (task: PdfOcrTask) => void | Promise<void>,
 ): Promise<PdfOcrTask> {
   // 最多等两个小时。
   const deadline = Date.now() + 2 * 60 * 60 * 1000;
 
   while (Date.now() < deadline) {
     const task = await getPdfOcrTask(taskId);
+    await onProgress?.(task);
 
     if (task.status === "completed") {
       if (!task.text?.trim()) {

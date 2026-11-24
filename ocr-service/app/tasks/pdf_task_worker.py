@@ -6,7 +6,7 @@ from typing import Any
 import pymupdf
 
 from app.core.config import ocr_config
-from app.tasks.page_process_runner import PageProcessError, run_page_process
+from app.tasks.page_process_runner import run_page_process
 from app.tasks.pdf_task_repository import PdfTaskRepository
 
 
@@ -64,11 +64,25 @@ async def process_one_task(
                     )
                     last_error = None
                     break
-                except PageProcessError as error:
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    # 子进程崩溃（PageProcessError）以外，识别器本身抛的异常也只算这一页失败
                     last_error = error
             if last_error is not None:
-                raise last_error
+                # 单页失败不拖垮整本书：记下这一页，继续后面的页
+                repository.fail_page(
+                    task_id,
+                    current_page,
+                    f"第 {current_page} 页处理失败：{type(last_error).__name__}: {last_error}",
+                )
         if repository.is_task_cancelled(task_id):
+            return
+
+        # 一页都没识别出来才算整本失败；部分页失败时照常完成，失败页数通过 failedPages 返回
+        pages = repository.list_pages(task_id)
+        if pages and all(page.status == "failed" for page in pages):
+            repository.fail_task(task_id, f"全部 {len(pages)} 页识别失败：{pages[-1].error}")
             return
 
         repository.complete_task(task_id)

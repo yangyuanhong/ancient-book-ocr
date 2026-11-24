@@ -64,6 +64,29 @@ const chatFileSchema = new Schema<ChatFileDocument>(
     processingError: {
       type: String,
     },
+    // 实际走的处理链路：document = 直接解析文本，ocr = OCR 识别（图片 / 扫描版 PDF）
+    // 前端据此画出对应的步骤链，刷新后也能还原
+    processingMode: {
+      type: String,
+      enum: ["document", "ocr"],
+    },
+    // 荀子校对失败的原因。校对失败不影响附件可用（回退为 OCR 原文），所以单独记录，不写 processingError
+    correctionError: {
+      type: String,
+    },
+    // 扫描版 PDF 的逐页识别进度：共几页、成功几页、失败几页、正在识别第几页
+    ocrProgress: {
+      type: new Schema(
+        {
+          pageCount: { type: Number, required: true },
+          succeededPages: { type: Number, default: 0 },
+          failedPages: { type: Number, default: 0 },
+          currentPage: { type: Number },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
     documentType: {
       type: String,
       enum: ["ancient_book", "modern_document", "mixed", "unknown"],

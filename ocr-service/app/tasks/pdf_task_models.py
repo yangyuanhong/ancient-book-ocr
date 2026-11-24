@@ -51,6 +51,7 @@ class PdfTaskRecord:
         self,
         pages: Iterable[PdfPageRecord] = (),
     ) -> dict[str, Any]:
+        pages = list(pages)
         return {
             "ok": True,
             "taskId": self.task_id,
@@ -58,7 +59,15 @@ class PdfTaskRecord:
             "ocrType": self.ocr_type,
             "status": self.status,
             "pageCount": self.page_count,
+            # processedPages 包含失败页，用于算进度；成功、失败页数单独给出
             "processedPages": self.processed_pages,
+            "succeededPages": sum(1 for page in pages if page.status == "completed"),
+            "failedPages": sum(1 for page in pages if page.status == "failed"),
+            # 正在识别的页码，前端显示“正在识别第 N 页”
+            "currentPage": next(
+                (page.page_number for page in pages if page.status == "processing"),
+                None,
+            ),
             "progress": self.progress,
             "error": self.error,
             "text": self.full_text if self.status == "completed" else "",

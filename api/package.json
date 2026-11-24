@@ -7,7 +7,8 @@
     "dev": "chcp 65001 > nul && tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "seed": "chcp 65001 > nul && tsx src/scripts/seedAdmin.ts"
+    "seed": "chcp 65001 > nul && tsx src/scripts/seedAdmin.ts",
+    "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@firecrawl/anydoc": "^0.2.4",

@@ -3,7 +3,9 @@ import {
   AgentToolStartPayload,
   type AgentDeltaPayload,
   type AgentErrorPayload,
+  type FileStatusPayload,
 } from "@/utils/socket";
+import { toFileProcessing } from "@/views/agent/utils";
 import type { ActiveChatLike, MessageModel, User } from "@/views/agent/types";
 import { message } from "ant-design-vue";
 import { type Ref } from "vue";
@@ -169,6 +171,28 @@ export const handleAgentDelta = (
     answeringMessageIds.delete(payload.messageId);
     lastSequences.delete(payload.messageId);
   }
+};
+
+/**
+ * 收到 file:status 时，按 fileId 找到消息里的附件并更新处理状态，驱动步骤链刷新。
+ * 用 splice 替换整条消息，保证 Bubble.List 的 computed 能感知到变化。
+ * 返回是否找到了对应附件。
+ */
+export const handleFileStatus = (
+  payload: FileStatusPayload,
+  messagesText: Ref<MessageModel[]>,
+): boolean => {
+  for (let index = messagesText.value.length - 1; index >= 0; index--) {
+    const item = messagesText.value[index];
+    const fileIndex = item.files?.findIndex((file) => file.fileId === payload.fileId) ?? -1;
+    if (fileIndex < 0 || !item.files) continue;
+
+    const files = [...item.files];
+    files[fileIndex] = { ...files[fileIndex], processing: toFileProcessing(payload) };
+    messagesText.value.splice(index, 1, { ...item, files });
+    return true;
+  }
+  return false;
 };
 
 // 调用工具处理

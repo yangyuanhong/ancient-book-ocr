@@ -6,10 +6,12 @@ import {
   createPdfOcrTask,
   recognizeImage,
   recognizeAncientImage,
+  toOcrPageProgress,
   waitForPdfOcrTask,
 } from "./ocr-client.js";
 import { correctAncientText } from "./xunzi-client.js";
 import { DocumentNeedsOcrError, parseDocument } from "./document-parser.js";
+import { classifyDocument } from "./document-classifier.js";
 import { ChatFileDocument } from "../models/types/index.js";
 import { emitChatFileStatus } from "../socket/file-status.js";
 
@@ -23,6 +25,7 @@ const imageMimeTypes = new Set([
 
 async function processDocument(absoluteFilePath: string, file: ChatFileDocument) {
   file.status = "processing";
+  file.processingMode = "document";
   file.processingStage = "parsing";
   file.processingError = undefined;
   await file.save();
@@ -95,6 +98,7 @@ async function processImageByOcr(file: ChatFileDocument, absoluteFilePath: strin
   let ocrText = file.ocrRawText?.trim() || "";
   if (!ocrText) {
     file.status = "processing";
+    file.processingMode = "ocr";
     file.processingStage = "ocr";
     file.processingError = undefined;
     await file.save();
@@ -116,7 +120,9 @@ async function processImageByOcr(file: ChatFileDocument, absoluteFilePath: strin
 }
 
 async function processPdfByOcr(file: ChatFileDocument, absoluteFilePath: string) {
+  // 先尝试过直接解析，文本层为空才会走到这里，所以链路改记为 OCR
   file.status = "processing";
+  file.processingMode = "ocr";
   file.processingStage = "ocr";
   file.processingError = undefined;
   await file.save();
@@ -131,15 +137,45 @@ async function processPdfByOcr(file: ChatFileDocument, absoluteFilePath: string)
     emitFileStatus(file);
   }
 
-  const completedTask = await waitForPdfOcrTask(taskId);
+  // 每 3 秒轮询一次 OCR 任务，只有页数进度真的变化时才落库、推送，避免空写
+  let lastProgressKey = "";
+  const completedTask = await waitForPdfOcrTask(taskId, async (task) => {
+    const progress = toOcrPageProgress(task);
+    const key = JSON.stringify(progress ?? null);
+    if (!progress || key === lastProgressKey) return;
+    lastProgressKey = key;
+    file.ocrProgress = progress;
+    await file.save();
+    emitFileStatus(file);
+  });
+
   const ocrText = completedTask.text.trim();
   file.ocrRawText = ocrText;
+  // 完成后保留总页数和失败页数，去掉“正在识别第几页”，刷新后也能看到最终结果
+  const finalProgress = toOcrPageProgress(completedTask);
+  if (finalProgress) file.ocrProgress = { ...finalProgress, currentPage: undefined };
   await file.save();
   emitFileStatus(file);
+  if (finalProgress?.failedPages) {
+    logger.warn(
+      { fileId: file._id.toString(), ...finalProgress },
+      "PDF 部分页面 OCR 失败，使用其余页面的识别结果继续处理",
+    );
+  }
+  await correctAndComplete(file, ocrText);
+}
+
+export async function retryAncientCorrection(fileId: string): Promise<void> {
+  const file = await ChatFileModel.findById(fileId);
+  if (!file) throw new Error("文件不存在");
+  const ocrText = file.ocrRawText?.trim();
+  if (!ocrText) throw new Error("没有可供荀子模型处理的 OCR 原文");
   await correctAndComplete(file, ocrText);
 }
 
 async function correctAndComplete(file: ChatFileDocument, ocrText: string) {
+  // 重试时可能直接从已保存的 OCR 结果进入，这里补记链路
+  file.processingMode = "ocr";
   classifyOcrDocument(file, ocrText);
   await file.save();
   emitFileStatus(file);
@@ -165,8 +201,19 @@ async function correctAndComplete(file: ChatFileDocument, ocrText: string) {
   file.processingError = undefined;
   await file.save();
   emitFileStatus(file);
-  // 交给荀子大模型解析古籍文本
-  const processedText = await correctAncientText(ocrText);
+  // 交给荀子大模型校对古籍文本。校对只是提升质量的附加步骤：
+  // 失败时回退为 OCR 原文，附件照样可用，对话不中断；失败原因记在 correctionError 里给前端展示
+  let processedText = ocrText;
+  file.correctionError = undefined;
+  try {
+    processedText = await correctAncientText(ocrText);
+  } catch (error) {
+    file.correctionError = error instanceof Error ? error.message : "荀子模型调用失败";
+    logger.warn(
+      { err: error, fileId: file._id.toString(), originalName: file.originalName },
+      "荀子模型校对失败，回退使用 OCR 原文",
+    );
+  }
 
   file.processedText = processedText;
   file.extractedMarkdown = processedText;
@@ -176,44 +223,65 @@ async function correctAndComplete(file: ChatFileDocument, ocrText: string) {
 
   await file.save();
   emitFileStatus(file);
-  logger.info({ originalName: file.originalName, ocrTextLength: ocrText.length, processedTextLength: processedText.length }, "扫描文件处理完成");
+  logger.info({ originalName: file.originalName, ocrTextLength: ocrText.length, processedTextLength: processedText.length, corrected: !file.correctionError }, "扫描文件处理完成");
 }
 
 function classifyOcrDocument(file: ChatFileDocument, text: string): void {
-  const sample = text.slice(0, 20000);
-  const chars = [...sample].filter((char) => /[\u3400-\u9fff]/u.test(char));
-  const traditional = [...sample].filter((char) => /[臺萬與為國學書體門後會見來時無從說實發傅]/u.test(char)).length;
-  const classical = (sample.match(/之乎者也、矣焉哉兮於以其乃若夫盖曰/gu) || []).length;
-  const punctuation = (sample.match(/[，。！？；：、“”‘’《》]/gu) || []).length;
-  const traditionalRatio = chars.length ? traditional / chars.length : 0;
-  const classicalRatio = chars.length ? Math.min(classical / chars.length * 35, 1) : 0;
-  const punctuationRatio = sample.length ? punctuation / sample.length : 0;
-  const verticalHints = /(卷[一二三四五六七八九十百]|第[一二三四五六七八九十百]+卷|序|跋|目錄|目录|版心|魚尾|鱼尾)/u.test(sample);
-  const score = Math.min(
-    traditionalRatio * 0.35 + classicalRatio * 0.4 + (verticalHints ? 0.2 : 0) + (punctuationRatio < 0.015 ? 0.05 : 0),
-    1,
-  );
-  const type = score >= 0.65 ? "ancient_book" : score >= 0.4 ? "mixed" : "modern_document";
-  file.documentType = type;
-  file.classificationConfidence = Number(Math.max(score, 1 - score).toFixed(3));
-  file.classificationReasons = [
-    `繁体字比例 ${(traditionalRatio * 100).toFixed(1)}%`,
-    `文言特征 ${classicalRatio >= 0.2 ? "明显" : "较弱"}`,
-    verticalHints ? "检测到古籍版式关键词" : "未检测到明显古籍版式关键词",
-  ];
+  // 判定逻辑见 document-classifier.ts；只有 ancient_book 会调用荀子大模型校对
+  const result = classifyDocument(text);
+  file.documentType = result.documentType;
+  file.classificationConfidence = result.confidence;
+  file.classificationReasons = result.reasons;
 }
 
-function emitFileStatus(file: ChatFileDocument): void {
+/**
+ * 附件处理状态的公开字段。Socket 推送、状态查询接口、历史消息附件共用，
+ * 保证前端的处理步骤链在实时更新和刷新后看到的是同一份数据。
+ */
+export function toFileProcessingInfo(
+  // 用 Pick 而不是整个文档类型，这样 .lean() 查出来的普通对象也能直接传入
+  file: Pick<
+    ChatFileDocument,
+    | "status"
+    | "processingStage"
+    | "processingError"
+    | "processingMode"
+    | "correctionError"
+    | "ocrProgress"
+    | "documentType"
+    | "classificationConfidence"
+    | "classificationReasons"
+  >,
+) {
+  return {
+    status: file.status,
+    processingStage: file.processingStage,
+    ...(file.processingError ? { processingError: file.processingError } : {}),
+    ...(file.processingMode ? { processingMode: file.processingMode } : {}),
+    ...(file.correctionError ? { correctionError: file.correctionError } : {}),
+    // 显式拷成普通对象：Mongoose 子文档直接交给 socket.io / res.json 可能带出内部字段
+    ...(file.ocrProgress?.pageCount
+      ? {
+          ocrProgress: {
+            pageCount: file.ocrProgress.pageCount,
+            succeededPages: file.ocrProgress.succeededPages ?? 0,
+            failedPages: file.ocrProgress.failedPages ?? 0,
+            ...(file.ocrProgress.currentPage ? { currentPage: file.ocrProgress.currentPage } : {}),
+          },
+        }
+      : {}),
+    ...(file.documentType ? { documentType: file.documentType } : {}),
+    ...(file.classificationConfidence !== undefined ? { classificationConfidence: file.classificationConfidence } : {}),
+    ...(file.classificationReasons?.length ? { classificationReasons: file.classificationReasons } : {}),
+  };
+}
+
+export function emitFileStatus(file: ChatFileDocument): void {
   emitChatFileStatus({
     conversationId: file.conversationId,
     fileId: file._id.toString(),
     name: file.originalName,
-    status: file.status,
-    processingStage: file.processingStage,
-    ...(file.processingError ? { processingError: file.processingError } : {}),
-    ...(file.documentType ? { documentType: file.documentType } : {}),
-    ...(file.classificationConfidence !== undefined ? { classificationConfidence: file.classificationConfidence } : {}),
-    ...(file.classificationReasons?.length ? { classificationReasons: file.classificationReasons } : {}),
+    ...toFileProcessingInfo(file),
   });
 }
 

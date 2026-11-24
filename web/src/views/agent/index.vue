@@ -36,6 +36,7 @@
           :current-user-id="currentUser.id"
           :current-user-avatar="currentUser.avatar"
           :assistant-name="assistantUser.name"
+          :on-retry-correction="handleRetryCorrection"
         />
       </template>
       <template #footer>
@@ -72,15 +73,20 @@ import ConversationNameModal from "@/views/agent/vue/ConversationNameModal.vue";
 import { Modal, message } from "ant-design-vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { AgentChat, MessageModel, User } from "@/views/agent/types";
-import { sendMessage as sendAgentMessage } from "@/views/agent/ts/send-message";
+import {
+  continueAfterCorrectionRetry,
+  sendMessage as sendAgentMessage,
+} from "@/views/agent/ts/send-message";
 import {
   applyGenerationSnapshot,
   handleAgentDelta,
+  handleFileStatus,
   handleAgentError,
   handleAgentToolEnd,
   handleAgentToolStart,
 } from "@/views/agent/ts/agent-event-handle";
 import { useConversations } from "./composables/useConversations";
+import { retryConversationFileCorrection } from "@/api/agent/files";
 
 const authStore = useAuthStore();
 const socket = getSocket();
@@ -117,6 +123,40 @@ const activeChat = ref<AgentChat>({
 
 // 发送/流式处理函数通过 typingUsers 标记助手是否在回复，这里直接复用
 const replying = computed(() => !!activeChat.value.typingUsers?.length);
+
+async function handleRetryCorrection(fileId: string) {
+  const conversationId = activeChat.value.id;
+  if (!conversationId) return;
+  try {
+    await retryConversationFileCorrection(conversationId, fileId);
+  } catch (error: any) {
+    message.error(error?.response?.data?.message || "重试荀子校正失败");
+    return;
+  }
+  markCorrectionRetrying(fileId);
+  // 等重新校对的结果：成功就接着调用主模型，失败则节点回到失败状态等下一次重试
+  await continueAfterCorrectionRetry(conversationId, fileId, messagesText, activeChat, assistantUser);
+}
+
+/** 不等 socket 推送，先把荀子节点切回“校对中”（去掉 correctionError 即显示加载状态） */
+function markCorrectionRetrying(fileId: string) {
+  const owner = messagesText.value.find((item) => item.files?.some((file) => file.fileId === fileId));
+  const current = owner?.files?.find((file) => file.fileId === fileId);
+  if (!current?.processing) return;
+  handleFileStatus(
+    {
+      ...current.processing,
+      conversationId: activeChat.value.id,
+      fileId,
+      name: current.name,
+      status: "processing",
+      processingStage: "correction",
+      processingError: undefined,
+      correctionError: undefined,
+    },
+    messagesText,
+  );
+}
 
 const {
   initializeChat,
@@ -265,22 +305,15 @@ const handleAgentToolEndEvent = (payload: AgentToolEndPayload) => {
   handleAgentToolEnd(payload, messagesText);
 };
 
+// 处理进度由消息里附件的步骤链实时展示，这里只在失败时额外弹提示，避免漏看
 const handleFileStatusEvent = (payload: FileStatusPayload) => {
   if (payload.conversationId !== activeChat.value.id) return;
-  const key = `file-${payload.fileId}`;
+  handleFileStatus(payload, messagesText);
 
-  if (payload.status === "ready") {
-    message.success({ content: `${payload.name} 解析完成`, key });
-  } else if (payload.status === "failed") {
+  if (payload.status === "failed") {
     message.error({
-      content: `${payload.name} 解析失败：${payload.processingError || "未知错误"}`,
-      key,
-    });
-  } else {
-    message.loading({
-      content: `${payload.name} ${payload.processingStage === "parsing" ? "解析中" : "处理中"}...`,
-      key,
-      duration: 0,
+      content: `${payload.name} 处理失败：${payload.processingError || "未知错误"}`,
+      key: `file-${payload.fileId}`,
     });
   }
 };
